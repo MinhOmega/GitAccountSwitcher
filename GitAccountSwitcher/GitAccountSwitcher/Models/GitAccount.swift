@@ -85,19 +85,19 @@ extension GitAccount: Codable {
 extension GitAccount {
     static let preview = GitAccount(
         displayName: "Personal",
-        githubUsername: "MinhOmega",
-        personalAccessToken: "ghp_xxxxxxxxxxxx",
-        gitUserName: "MinhOmega",
-        gitUserEmail: "minh@personal.com",
+        githubUsername: "preview-user",
+        personalAccessToken: "",  // SECURITY: Always empty in preview - tokens never needed for UI
+        gitUserName: "Preview User",
+        gitUserEmail: "preview@example.com",
         isActive: true
     )
 
     static let previewWork = GitAccount(
         displayName: "Work",
-        githubUsername: "minhvo-orient",
-        personalAccessToken: "ghp_yyyyyyyyyyyy",
-        gitUserName: "minhvo-orient",
-        gitUserEmail: "minh.vo@company.com",
+        githubUsername: "preview-work",
+        personalAccessToken: "",  // SECURITY: Always empty in preview
+        gitUserName: "Preview Work User",
+        gitUserEmail: "work@example.com",
         isActive: false
     )
 }
