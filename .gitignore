@@ -19,6 +19,7 @@ Icon
 Network Trash Folder
 Temporary Items
 .apdisk
+.com.apple.smb.streams.metadata
 
 # Xcode
 *.xcodeproj/*
@@ -30,6 +31,10 @@ xcuserdata/
 *.xcuserstate
 *.xcscmblueprint
 *.xccheckout
+*.xcbkptlist
+*.xcworkspace/xcuserdata/
+timeline.xctimeline
+playground.xcworkspace
 
 # Swift Package Manager
 .build/
@@ -37,6 +42,9 @@ xcuserdata/
 Packages/
 Package.resolved
 *.xcodeproj
+.swiftpm/xcode/package.xcworkspace/
+*.swiftpm
+.build-repl/
 
 # CocoaPods
 Pods/
@@ -51,6 +59,15 @@ build/
 DerivedData/
 *.build/
 *.xcarchive
+
+# Instruments
+*.trace
+
+# Fastlane (if used in future)
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
 
 # Code signing
 *.cer
@@ -68,6 +85,11 @@ config.local.json
 .env
 .env.local
 .env.*.local
+**/secrets/
+**/*-token
+**/*-credentials
+credentials/
+tokens/
 
 # IDEs
 .vscode/

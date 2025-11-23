@@ -78,6 +78,68 @@ final class GitConfigService {
     static let shared = GitConfigService()
     private init() {}
 
+    // MARK: - Input Validation
+
+    /// Validates and sanitizes git config values to prevent injection attacks
+    private func validateConfigValue(_ value: String, field: String) throws -> String {
+        // SECURITY: Check for control characters (including newlines, tabs, null bytes)
+        // These could be used to inject arbitrary git configuration
+        let controlCharacters = CharacterSet.controlCharacters
+        if value.rangeOfCharacter(from: controlCharacters) != nil {
+            throw GitConfigError.validationError("\(field) contains invalid control characters")
+        }
+
+        // SECURITY: Check for git special characters that could affect config parsing
+        let dangerousChars = CharacterSet(charactersIn: "[]")
+        if value.rangeOfCharacter(from: dangerousChars) != nil {
+            throw GitConfigError.validationError("\(field) contains invalid characters")
+        }
+
+        // Enforce reasonable length limits (git config has internal limits)
+        guard value.count <= 255 else {
+            throw GitConfigError.validationError("\(field) exceeds maximum length (255 characters)")
+        }
+
+        // Must not be empty or only whitespace
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else {
+            throw GitConfigError.validationError("\(field) cannot be empty")
+        }
+
+        return value
+    }
+
+    /// Validates email format (RFC 5322 basic compliance)
+    private func validateEmail(_ email: String) throws -> String {
+        let validated = try validateConfigValue(email, field: "email")
+
+        // Basic email regex validation
+        let emailRegex = #"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"#
+        let emailPredicate = NSPredicate(format: "SELF MATCHES %@", emailRegex)
+
+        guard emailPredicate.evaluate(with: validated) else {
+            throw GitConfigError.validationError("Invalid email format")
+        }
+
+        return validated
+    }
+
+    /// Validates git config keys to prevent path traversal
+    private func validateConfigKey(_ key: String) throws {
+        // Git config key format: section.subsection.key
+        let keyRegex = #"^[a-zA-Z][a-zA-Z0-9-]*(\.[a-zA-Z][a-zA-Z0-9-]*)*$"#
+        let keyPredicate = NSPredicate(format: "SELF MATCHES %@", keyRegex)
+
+        guard keyPredicate.evaluate(with: key) else {
+            throw GitConfigError.validationError("Invalid config key format")
+        }
+
+        // SECURITY: Prevent path traversal attempts
+        guard !key.contains("..") && !key.contains("/") && !key.contains("\\") else {
+            throw GitConfigError.validationError("Config key contains invalid path characters")
+        }
+    }
+
     // MARK: - Git Config Operations
 
     /// Gets the current global user.name
@@ -90,14 +152,16 @@ final class GitConfigService {
         try getConfig(key: "user.email", scope: .global)
     }
 
-    /// Sets the global user.name
+    /// Sets the global user.name with validation
     func setGlobalUserName(_ name: String) throws {
-        try setConfig(key: "user.name", value: name, scope: .global)
+        let validatedName = try validateConfigValue(name, field: "user.name")
+        try setConfig(key: "user.name", value: validatedName, scope: .global)
     }
 
-    /// Sets the global user.email
+    /// Sets the global user.email with validation
     func setGlobalUserEmail(_ email: String) throws {
-        try setConfig(key: "user.email", value: email, scope: .global)
+        let validatedEmail = try validateEmail(email)
+        try setConfig(key: "user.email", value: validatedEmail, scope: .global)
     }
 
     /// Sets both user.name and user.email atomically
@@ -135,6 +199,8 @@ final class GitConfigService {
     }
 
     private func getConfig(key: String, scope: ConfigScope) throws -> String? {
+        try validateConfigKey(key)
+
         do {
             let output = try runGitCommand(["config", scope.rawValue, "--get", key])
             return output.isEmpty ? nil : output
@@ -145,7 +211,8 @@ final class GitConfigService {
     }
 
     private func setConfig(key: String, value: String, scope: ConfigScope) throws {
-        _ = try runGitCommand(["config", scope.rawValue, key, value])
+        try validateConfigKey(key)
+        _ = try runGitCommand(["config", scope.rawValue, "--replace-all", key, value])
     }
 
     @discardableResult
@@ -174,10 +241,42 @@ final class GitConfigService {
         let stderr = String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
         guard process.terminationStatus == 0 else {
-            throw GitConfigError.commandFailed(stderr.isEmpty ? "Exit code \(process.terminationStatus)" : stderr)
+            let sanitizedError = sanitizeGitError(stderr, arguments: arguments)
+            throw GitConfigError.commandFailed(sanitizedError)
         }
 
         return stdout
+    }
+
+    /// Sanitizes git error messages to prevent information disclosure
+    private func sanitizeGitError(_ stderr: String, arguments: [String]) -> String {
+        if stderr.isEmpty {
+            return "Git command failed"
+        }
+
+        // SECURITY: Remove file paths that could leak system information
+        var sanitized = stderr.replacingOccurrences(
+            of: #"/Users/[^/\s']+"#,
+            with: "[HOME]",
+            options: .regularExpression
+        )
+
+        sanitized = sanitized.replacingOccurrences(
+            of: #"~[^/\s']*"#,
+            with: "[HOME]",
+            options: .regularExpression
+        )
+
+        // Return generic messages for common errors
+        if sanitized.contains("permission denied") {
+            return "Permission denied accessing git config"
+        }
+        if sanitized.contains("not found") {
+            return "Git config key not found"
+        }
+
+        // Generic error with command context
+        return "Git config operation failed"
     }
 }
 

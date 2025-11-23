@@ -17,6 +17,11 @@ final class AccountStore: ObservableObject {
     private let keychainService = KeychainService.shared
     private let gitConfigService = GitConfigService.shared
 
+    // MARK: - Concurrency Control
+
+    private let switchLock = NSLock()
+    private var isSwitching = false
+
     // MARK: - Storage Keys
 
     private let accountsStorageKey = "savedAccounts"
@@ -97,10 +102,24 @@ final class AccountStore: ObservableObject {
 
     /// Switches to the specified account
     func switchToAccount(_ account: GitAccount) async throws {
+        // SECURITY: Prevent concurrent switch operations that could cause state corruption
+        switchLock.lock()
+        if isSwitching {
+            switchLock.unlock()
+            throw AccountStoreError.switchInProgress
+        }
+        isSwitching = true
+        switchLock.unlock()
+
         isLoading = true
         lastError = nil
 
-        defer { isLoading = false }
+        defer {
+            isLoading = false
+            switchLock.lock()
+            isSwitching = false
+            switchLock.unlock()
+        }
 
         do {
             // Retrieve token from keychain
@@ -120,7 +139,7 @@ final class AccountStore: ObservableObject {
                 email: account.gitUserEmail
             )
 
-            // Update active state in store
+            // Update active state in store (atomic update protected by MainActor)
             for i in accounts.indices {
                 accounts[i].isActive = accounts[i].id == account.id
                 if accounts[i].id == account.id {
@@ -174,6 +193,7 @@ final class AccountStore: ObservableObject {
         case tokenNotFound
         case accountNotFound
         case duplicateAccount(String)
+        case switchInProgress
 
         var errorDescription: String? {
             switch self {
@@ -183,6 +203,8 @@ final class AccountStore: ObservableObject {
                 return "Account not found"
             case .duplicateAccount(let username):
                 return "An account with GitHub username '\(username)' already exists"
+            case .switchInProgress:
+                return "Another account switch is already in progress. Please wait."
             }
         }
     }

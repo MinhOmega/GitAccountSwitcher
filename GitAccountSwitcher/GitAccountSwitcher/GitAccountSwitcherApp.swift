@@ -517,7 +517,8 @@ struct MenuBarContentView: View {
                 try? await UNUserNotificationCenter.current().add(request)
             }
         } catch {
-            print("Switch failed: \(error)")
+            // SECURITY: Don't log errors to console - they may contain sensitive data
+            // Error is already handled by UI in MainWindowView via accountStore.lastError
         }
     }
 

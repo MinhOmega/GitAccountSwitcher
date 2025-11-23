@@ -36,6 +36,31 @@ struct AddEditAccountView: View {
         }
     }
 
+    // MARK: - Validation Error
+
+    enum ValidationError: LocalizedError {
+        case invalidCharacters(String)
+        case inputTooLong(String)
+        case invalidEmail
+        case invalidGitHubUsername
+        case invalidToken
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidCharacters(let field):
+                return "\(field) contains invalid control characters"
+            case .inputTooLong(let field):
+                return "\(field) exceeds maximum length"
+            case .invalidEmail:
+                return "Invalid email format"
+            case .invalidGitHubUsername:
+                return "Invalid GitHub username format (alphanumeric, hyphens only, max 39 chars)"
+            case .invalidToken:
+                return "Invalid Personal Access Token format"
+            }
+        }
+    }
+
     @EnvironmentObject var accountStore: AccountStore
     @Environment(\.dismiss) private var dismiss
 
@@ -58,10 +83,10 @@ struct AddEditAccountView: View {
     private var isValid: Bool {
         !displayName.trimmingCharacters(in: .whitespaces).isEmpty &&
         !githubUsername.trimmingCharacters(in: .whitespaces).isEmpty &&
-        !personalAccessToken.trimmingCharacters(in: .whitespaces).isEmpty &&
+        isValidGitHubToken(personalAccessToken.trimmingCharacters(in: .whitespaces)) &&
         !gitUserName.trimmingCharacters(in: .whitespaces).isEmpty &&
         !gitUserEmail.trimmingCharacters(in: .whitespaces).isEmpty &&
-        gitUserEmail.contains("@")
+        isValidEmail(gitUserEmail.trimmingCharacters(in: .whitespaces))
     }
 
     var body: some View {
@@ -87,6 +112,10 @@ struct AddEditAccountView: View {
         }
         .frame(width: 400, height: 480)
         .onAppear(perform: loadExistingAccount)
+        .onDisappear {
+            // SECURITY: Clear token from memory when view closes
+            personalAccessToken = ""
+        }
         .alert("Error", isPresented: $showingError, presenting: saveError) { _ in
             Button("OK", role: .cancel) {}
         } message: { error in
@@ -193,6 +222,86 @@ struct AddEditAccountView: View {
         .padding()
     }
 
+    // MARK: - Validation Helpers
+
+    /// Validates comprehensive input before saving
+    private func validateInputs() throws {
+        // Validate no control characters in any field
+        let inputs: [(String, String)] = [
+            (displayName, "Display name"),
+            (githubUsername, "GitHub username"),
+            (gitUserName, "Name"),
+            (gitUserEmail, "Email")
+        ]
+
+        for (input, fieldName) in inputs {
+            guard input.rangeOfCharacter(from: .controlCharacters) == nil else {
+                throw ValidationError.invalidCharacters(fieldName)
+            }
+            guard !input.contains("\0") else {
+                throw ValidationError.invalidCharacters(fieldName)
+            }
+        }
+
+        // Validate lengths
+        guard displayName.count <= 100 else {
+            throw ValidationError.inputTooLong("Display name")
+        }
+        guard githubUsername.count <= 39 else {  // GitHub's max username length
+            throw ValidationError.inputTooLong("GitHub username")
+        }
+        guard gitUserName.count <= 200 else {
+            throw ValidationError.inputTooLong("Name")
+        }
+        guard gitUserEmail.count <= 254 else {  // RFC 5321 max email length
+            throw ValidationError.inputTooLong("Email")
+        }
+
+        // Validate GitHub username format
+        let githubRegex = #"^[a-zA-Z0-9](?:[a-zA-Z0-9]|-(?=[a-zA-Z0-9])){0,38}$"#
+        guard githubUsername.range(of: githubRegex, options: .regularExpression) != nil else {
+            throw ValidationError.invalidGitHubUsername
+        }
+
+        // Validate email format
+        guard isValidEmail(gitUserEmail) else {
+            throw ValidationError.invalidEmail
+        }
+
+        // Validate token format
+        guard isValidGitHubToken(personalAccessToken) else {
+            throw ValidationError.invalidToken
+        }
+    }
+
+    /// Validates email format
+    private func isValidEmail(_ email: String) -> Bool {
+        let emailRegex = #"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"#
+        return email.range(of: emailRegex, options: .regularExpression) != nil
+    }
+
+    /// Validates GitHub Personal Access Token format
+    private func isValidGitHubToken(_ token: String) -> Bool {
+        let trimmed = token.trimmingCharacters(in: .whitespaces)
+
+        // Check for classic PAT format: ghp_[40 alphanumeric chars]
+        if trimmed.hasPrefix("ghp_") {
+            let suffix = trimmed.dropFirst(4)
+            return suffix.count == 40 && suffix.allSatisfy { $0.isLetter || $0.isNumber }
+        }
+
+        // Check for fine-grained PAT format: github_pat_[82+ base62 encoded chars]
+        if trimmed.hasPrefix("github_pat_") {
+            let suffix = trimmed.dropFirst(11)
+            let base62Chars = CharacterSet(charactersIn: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_")
+            return suffix.count >= 82 && suffix.rangeOfCharacter(from: base62Chars.inverted) == nil
+        }
+
+        // For backwards compatibility or future token formats, accept any token >= 20 chars
+        // that contains only alphanumeric and underscores
+        return trimmed.count >= 20 && trimmed.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
+    }
+
     // MARK: - Actions
 
     private func loadExistingAccount() {
@@ -216,10 +325,16 @@ struct AddEditAccountView: View {
             defer {
                 Task { @MainActor in
                     isSaving = false
+                    // SECURITY: Clear token from memory after save attempt
+                    personalAccessToken = ""
                 }
             }
 
             do {
+                // SECURITY: Validate all inputs before processing
+                try validateInputs()
+
+                // Create account with trimmed values
                 let account = GitAccount(
                     id: mode.account?.id ?? UUID(),
                     displayName: displayName.trimmingCharacters(in: .whitespaces),

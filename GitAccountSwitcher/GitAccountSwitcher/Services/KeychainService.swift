@@ -249,9 +249,13 @@ extension KeychainService {
             kSecAttrAccount as String: accountId.uuidString
         ]
 
-        // Try to add first
+        // Try to add first with security attributes
         var addQuery = query
         addQuery[kSecValueData as String] = tokenData
+        // SECURITY: Only accessible when device is unlocked, non-migratable
+        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        // SECURITY: Prevent iCloud Keychain sync - tokens stay local
+        addQuery[kSecAttrSynchronizable as String] = false
 
         let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
 
@@ -262,7 +266,10 @@ extension KeychainService {
         // If duplicate, try to update instead
         if addStatus == errSecDuplicateItem {
             let updateAttributes: [String: Any] = [
-                kSecValueData as String: tokenData
+                kSecValueData as String: tokenData,
+                // SECURITY: Maintain security attributes on update
+                kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+                kSecAttrSynchronizable as String: false
             ]
 
             let updateStatus = SecItemUpdate(query as CFDictionary, updateAttributes as CFDictionary)
