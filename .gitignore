@@ -107,3 +107,29 @@ __pycache__/
 *$py.class
 venv/
 .Python
+
+# Temporary files and debugging
+/temp/
+temp/
+**/temp/
+debug-*.swift
+debug-*.py
+test-*.swift
+analyze-*.sh
+*-debug.*
+*.debug
+
+# Don't ignore reports directory
+!reports/
+!reports/**
+
+# Don't ignore AGENTS.md and symlinks
+!AGENTS.md
+!CLAUDE.md
+!GEMINI.md
+!.clinerules
+!.cursorrules
+!.windsurfrules
+!.replit.md
+!.github/copilot-instructions.md
+!.idx/airules.md

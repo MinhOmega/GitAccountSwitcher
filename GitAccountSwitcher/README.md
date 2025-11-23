@@ -1,148 +1,408 @@
 # Git Account Switcher
 
-A native macOS menu bar app that allows you to quickly switch between multiple GitHub accounts. It updates both your Keychain credentials and git configuration (`user.name`, `user.email`) with a single click.
+<p align="center">
+  <img src="docs/icon.png" alt="Git Account Switcher Icon" width="128" height="128">
+</p>
+
+<p align="center">
+  <strong>A native macOS menu bar app for seamlessly switching between multiple GitHub accounts</strong>
+</p>
+
+<p align="center">
+  <a href="#features">Features</a> |
+  <a href="#installation">Installation</a> |
+  <a href="#usage">Usage</a> |
+  <a href="#how-it-works">How It Works</a> |
+  <a href="#troubleshooting">Troubleshooting</a>
+</p>
+
+---
 
 ## Features
 
-- **Menu Bar Interface**: Lives in your menu bar for quick access
-- **Keychain Integration**: Automatically updates GitHub credentials in macOS Keychain
-- **Git Config Management**: Updates `git config --global user.name` and `user.email`
-- **Secure Storage**: Personal Access Tokens are stored securely in Keychain
-- **No Dock Icon**: Runs as a background utility (menu bar only)
+- **Menu Bar Interface** - Lives in your menu bar for instant access
+- **One-Click Switching** - Switch accounts with a single click
+- **Keychain Integration** - Automatically updates GitHub credentials in macOS Keychain
+- **Git Config Management** - Updates `git config --global user.name` and `user.email`
+- **Secure Storage** - Personal Access Tokens stored securely in Keychain (never in plain text)
+- **Launch at Login** - Optionally start automatically when you log in
+- **Native Notifications** - Get notified when account switches complete
+- **No Dock Icon** - Runs as a background utility (menu bar only)
+- **Dark Mode Support** - Follows your system appearance
 
 ## Requirements
 
-- macOS 13.0 (Ventura) or later
-- Xcode 15.0 or later (for building)
-- Git installed at `/usr/bin/git`
+- **macOS 13.0** (Ventura) or later
+- **Xcode 15.0** or later (for building from source)
+- **Git** installed (typically at `/usr/bin/git` or via Homebrew)
+- **GitHub CLI** (optional, for repository setup)
 
 ## Installation
 
-### Building from Source
+### Option 1: Build from Command Line (Recommended)
 
-1. Open the project in Xcode:
-   ```bash
-   open GitAccountSwitcher.xcodeproj
-   ```
+```bash
+# Clone the repository
+git clone https://github.com/MinhOmega/GitAccountSwitcher.git
+cd GitAccountSwitcher/GitAccountSwitcher
 
-2. Select your Development Team in Xcode:
-   - Select the project in the navigator
-   - Go to "Signing & Capabilities" tab
-   - Select your team from the dropdown
+# Build the app (Release configuration)
+xcodebuild -project GitAccountSwitcher.xcodeproj \
+  -scheme GitAccountSwitcher \
+  -configuration Release \
+  -derivedDataPath build \
+  build
 
-3. Build and run (⌘R)
+# Copy to Applications folder
+cp -R build/Build/Products/Release/GitAccountSwitcher.app /Applications/
 
-### Manual Installation
+# Launch the app
+open /Applications/GitAccountSwitcher.app
+```
 
-After building, you can find the app at:
-- `~/Library/Developer/Xcode/DerivedData/GitAccountSwitcher-xxx/Build/Products/Debug/GitAccountSwitcher.app`
+### Option 2: Build with Xcode
 
-Copy it to your Applications folder for permanent use.
+```bash
+# Clone the repository
+git clone https://github.com/MinhOmega/GitAccountSwitcher.git
+cd GitAccountSwitcher/GitAccountSwitcher
+
+# Open in Xcode
+open GitAccountSwitcher.xcodeproj
+```
+
+Then in Xcode:
+1. Select your **Development Team** in Project Settings > Signing & Capabilities
+2. Select **Product > Archive** for a release build, or press **Cmd+R** to build and run
+3. For Archive: **Distribute App > Copy App** to export the `.app` file
+
+### Option 3: One-Line Install Script
+
+```bash
+# Clone, build, and install in one command
+git clone https://github.com/MinhOmega/GitAccountSwitcher.git && \
+cd GitAccountSwitcher/GitAccountSwitcher && \
+xcodebuild -project GitAccountSwitcher.xcodeproj \
+  -scheme GitAccountSwitcher \
+  -configuration Release \
+  -derivedDataPath build \
+  build && \
+cp -R build/Build/Products/Release/GitAccountSwitcher.app /Applications/ && \
+open /Applications/GitAccountSwitcher.app
+```
+
+### Verify Installation
+
+```bash
+# Check if the app is installed
+ls -la /Applications/GitAccountSwitcher.app
+
+# Check if it's running
+pgrep -l GitAccountSwitcher
+```
+
+### Uninstall
+
+```bash
+# Remove the app
+rm -rf /Applications/GitAccountSwitcher.app
+
+# Remove app data (optional)
+rm -rf ~/Library/Application\ Support/GitAccountSwitcher
+rm -rf ~/Library/Preferences/com.gitaccountswitcher.plist
+
+# Remove from Login Items (if enabled)
+# System Settings > General > Login Items > Remove GitAccountSwitcher
+```
 
 ## Usage
 
 ### Adding an Account
 
-1. Click the menu bar icon
-2. Click "Add Account"
+1. Click the menu bar icon (shows current account or question mark if none)
+2. Click **"Add Account"** or the **+** button
 3. Fill in the details:
-   - **Display Name**: A friendly name (e.g., "Personal", "Work")
+   - **Display Name**: A friendly name (e.g., "Personal", "Work", "Client-X")
    - **GitHub Username**: Your GitHub username
-   - **Personal Access Token**: Your GitHub PAT (see below)
-   - **Git User Name**: The name for git commits
+   - **Personal Access Token**: Your GitHub PAT ([create one here](#creating-a-personal-access-token))
+   - **Git User Name**: The name for git commits (can differ from GitHub username)
    - **Git User Email**: The email for git commits
-4. Click "Add"
+4. Click **"Add"**
 
 ### Switching Accounts
 
+**From Menu Bar:**
 1. Click the menu bar icon
-2. Hover over the account you want to switch to
-3. Click "Switch" or double-click the account
+2. Click on the account you want to switch to
 
-The app will:
-- Update the GitHub credentials in Keychain
-- Update your global git config
+**From Main Window:**
+1. Click menu bar icon > **"Open Window"**
+2. Click **"Switch"** button on any account card
 
-### Creating a Personal Access Token (PAT)
+When you switch accounts, the app will:
+- Update GitHub credentials in macOS Keychain
+- Run `git config --global user.name "Your Name"`
+- Run `git config --global user.email "your@email.com"`
+- Show a notification (if enabled)
+
+### Managing Accounts
+
+- **Edit**: Click the **...** menu on any account card > **Edit**
+- **Delete**: Click the **...** menu > **Delete**
+- **Reorder**: Open Settings > Accounts tab (drag to reorder coming soon)
+
+### Settings
+
+Access Settings via:
+- Menu bar > gear icon, or
+- Main window > gear icon in footer, or
+- **Cmd+,** when the app is focused
+
+**General Settings:**
+- Show notification on account switch
+- Launch at login
+
+### Creating a Personal Access Token
 
 1. Go to [GitHub Settings > Developer settings > Personal access tokens](https://github.com/settings/tokens)
-2. Click "Generate new token (classic)"
-3. Give it a name and select scopes:
-   - `repo` (for private repositories)
-   - `read:user`
-   - `user:email`
-4. Click "Generate token" and copy it
+2. Click **"Generate new token (classic)"** or **"Fine-grained tokens"**
+
+**For Classic Tokens:**
+Select these scopes:
+- `repo` - Full control of private repositories
+- `read:user` - Read user profile data
+- `user:email` - Access user email addresses
+
+**For Fine-grained Tokens:**
+- Repository access: All repositories (or select specific ones)
+- Permissions: Contents (Read and write), Metadata (Read)
+
+3. Click **"Generate token"** and **copy it immediately** (you won't see it again!)
 
 ## How It Works
 
 ### Keychain Management
 
-The app modifies the internet password entry for `github.com` in your Keychain. This is the same entry that Git uses when you run `git push` with HTTPS.
+The app manages GitHub credentials using the macOS Keychain Services API:
 
-**Keychain Entry Details:**
-- Kind: Internet password
-- Server: github.com
-- Protocol: HTTPS
-- Account: Your GitHub username
+```
+Keychain Entry:
+├── Kind: Internet password
+├── Server: github.com
+├── Protocol: HTTPS
+├── Account: <your-github-username>
+└── Password: <your-personal-access-token>
+```
+
+This is the same entry that Git's credential helper (`osxkeychain`) uses when you run `git push` with HTTPS.
+
+**App's Own Storage:**
+Account metadata (display name, emails) is stored in the app's private Keychain entries, separate from the GitHub credential.
 
 ### Git Config Management
 
-The app runs the following commands when switching:
+When switching accounts, the app executes:
+
 ```bash
 git config --global user.name "Your Name"
 git config --global user.email "your@email.com"
 ```
 
-## Security
+This updates `~/.gitconfig`:
 
-- **No Sandbox**: The app is not sandboxed because it needs:
-  - Full Keychain access (to modify GitHub credentials)
-  - Process execution (to run git commands)
-- **Tokens Encrypted**: Account tokens are stored in the app's own Keychain entries, separate from the GitHub credential
-- **Not App Store**: Cannot be distributed on Mac App Store due to sandboxing requirements
-
-## Troubleshooting
-
-### "Keychain item not found"
-
-This error occurs if there's no existing GitHub credential in Keychain. The app will create one when you switch accounts.
-
-### "Git command failed"
-
-Ensure git is installed:
-```bash
-which git
+```ini
+[user]
+    name = Your Name
+    email = your@email.com
 ```
 
-Should return `/usr/bin/git`.
+### Security Architecture
 
-### Credentials not working
-
-1. Verify your PAT is valid on GitHub
-2. Check if git credential helper is set correctly:
-   ```bash
-   git config --global credential.helper
-   ```
-   Should return `osxkeychain`.
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Git Account Switcher                  │
+├─────────────────────────────────────────────────────────┤
+│  AccountStore (ObservableObject)                        │
+│  - Coordinates all operations                           │
+│  - Persists account metadata to UserDefaults            │
+│  - DOES NOT store tokens in UserDefaults                │
+├─────────────────────────────────────────────────────────┤
+│  KeychainService (Singleton)                            │
+│  - Stores/retrieves tokens from macOS Keychain          │
+│  - Uses Security.framework APIs                         │
+│  - Tokens encrypted at rest by macOS                    │
+├─────────────────────────────────────────────────────────┤
+│  GitConfigService (Singleton)                           │
+│  - Executes git commands via Process API                │
+│  - Manages global git configuration                     │
+└─────────────────────────────────────────────────────────┘
+```
 
 ## Project Structure
 
 ```
 GitAccountSwitcher/
-├── GitAccountSwitcherApp.swift    # Main app with MenuBarExtra
-├── Models/
-│   └── GitAccount.swift           # Account data model
-├── Services/
-│   ├── KeychainService.swift      # Keychain operations
-│   ├── GitConfigService.swift     # Git config management
-│   └── AccountStore.swift         # Account persistence
-├── Views/
-│   ├── AccountListView.swift      # Main menu content
-│   └── AddEditAccountView.swift   # Account editor
-├── Assets.xcassets/               # App icons
-├── Info.plist                     # App configuration
-└── GitAccountSwitcher.entitlements
+├── GitAccountSwitcher.xcodeproj/     # Xcode project file
+├── GitAccountSwitcher/
+│   ├── GitAccountSwitcherApp.swift   # App entry point, MenuBarExtra, Windows
+│   ├── Models/
+│   │   └── GitAccount.swift          # Account data model (Codable)
+│   ├── Services/
+│   │   ├── KeychainService.swift     # macOS Keychain operations
+│   │   ├── GitConfigService.swift    # Git command execution
+│   │   └── AccountStore.swift        # State management (@MainActor)
+│   ├── Views/
+│   │   └── AddEditAccountView.swift  # Account form UI
+│   ├── Assets.xcassets/              # App icons and colors
+│   ├── Info.plist                    # Bundle configuration
+│   └── GitAccountSwitcher.entitlements
+├── docs/                             # Documentation assets
+├── build/                            # Build output (gitignored)
+└── README.md                         # This file
 ```
+
+## Troubleshooting
+
+### "Keychain item not found"
+
+**Cause:** No existing GitHub credential in Keychain.
+
+**Solution:** This is normal for first-time use. The app will create the credential when you switch to an account.
+
+### "Git command failed"
+
+**Cause:** Git is not installed or not in expected location.
+
+**Solution:**
+```bash
+# Check git installation
+which git
+# Expected: /usr/bin/git or /opt/homebrew/bin/git
+
+# If not installed, install via Homebrew
+brew install git
+
+# Or install Xcode Command Line Tools
+xcode-select --install
+```
+
+### Credentials not working after switch
+
+**Cause:** Git credential helper not configured.
+
+**Solution:**
+```bash
+# Check current credential helper
+git config --global credential.helper
+# Expected: osxkeychain
+
+# If not set, configure it
+git config --global credential.helper osxkeychain
+```
+
+### "The operation couldn't be completed" (Keychain error)
+
+**Cause:** Keychain access denied or locked.
+
+**Solution:**
+1. Open **Keychain Access** app
+2. Make sure your login keychain is unlocked
+3. Try removing any existing `github.com` entries and let the app recreate them
+
+### App doesn't appear in menu bar
+
+**Cause:** App crashed or system UI issue.
+
+**Solution:**
+```bash
+# Force quit and restart
+pkill GitAccountSwitcher
+open /Applications/GitAccountSwitcher.app
+
+# Check Console.app for crash logs
+open /Applications/Utilities/Console.app
+```
+
+### Build Errors
+
+**"Signing requires a development team"**
+- Open project in Xcode
+- Select your team in Signing & Capabilities
+- Or build with `CODE_SIGNING_ALLOWED=NO` for local testing:
+  ```bash
+  xcodebuild -project GitAccountSwitcher.xcodeproj \
+    -scheme GitAccountSwitcher \
+    -configuration Debug \
+    CODE_SIGNING_ALLOWED=NO \
+    build
+  ```
+
+**"No provisioning profile"**
+- Sign in with Apple ID in Xcode > Settings > Accounts
+- Select "Personal Team" for local development
+
+## Security Considerations
+
+### Why Not Sandboxed?
+
+The app requires these capabilities that are incompatible with App Store sandboxing:
+
+1. **Full Keychain Access** - Modify GitHub internet password entries
+2. **Process Execution** - Run `git` commands via shell
+3. **File System Access** - Read/write `~/.gitconfig`
+
+### Token Security
+
+- Tokens are stored in macOS Keychain (encrypted at rest)
+- Tokens are never logged or stored in plain text
+- Tokens are never stored in UserDefaults or plist files
+- Each account's token is stored in a separate Keychain entry
+
+### Best Practices
+
+1. **Use fine-grained tokens** with minimal required permissions
+2. **Set token expiration** dates (GitHub recommends 90 days or less)
+3. **Rotate tokens regularly** - Update tokens in the app when you regenerate them
+4. **Review Keychain Access** - Periodically check what apps have Keychain access
+
+## Development
+
+### Prerequisites
+
+- macOS 13.0+
+- Xcode 15.0+
+- Swift 5.9+
+
+### Building for Development
+
+```bash
+# Debug build
+xcodebuild -project GitAccountSwitcher.xcodeproj \
+  -scheme GitAccountSwitcher \
+  -configuration Debug \
+  build
+
+# Run tests (when available)
+xcodebuild -project GitAccountSwitcher.xcodeproj \
+  -scheme GitAccountSwitcher \
+  test
+```
+
+### Code Style
+
+- SwiftUI with MVVM architecture
+- `@MainActor` for UI-related code
+- `async/await` for asynchronous operations
+- `// MARK: -` comments for code organization
+- Triple-slash (`///`) documentation for public APIs
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/amazing-feature`
+3. Commit your changes: `git commit -m 'Add amazing feature'`
+4. Push to the branch: `git push origin feature/amazing-feature`
+5. Open a Pull Request
 
 ## License
 
@@ -152,3 +412,10 @@ MIT License - Feel free to modify and distribute.
 
 - Built with SwiftUI and the Security framework
 - Uses native macOS Keychain Services API
+- Icons from SF Symbols
+
+---
+
+<p align="center">
+  Made with ❤️ for developers who work with multiple GitHub accounts
+</p>

@@ -376,7 +376,7 @@ struct AccountCard: View {
     }
 
     private var actionsView: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 12) {
             if !account.isActive {
                 Button(action: { Task { await onSwitch() } }) {
                     if isSwitching {
@@ -401,12 +401,15 @@ struct AccountCard: View {
                     Label("Delete", systemImage: "trash")
                 }
             } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 12))
-                    .frame(width: 24, height: 24)
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 16, weight: .regular))
+                    .foregroundColor(.secondary)
+                    .frame(width: 32, height: 32)
+                    .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
-            .frame(width: 24)
+            .frame(width: 32)
+            .help("More options")
         }
     }
 }
@@ -742,7 +745,7 @@ struct AboutView: View {
 
             Spacer()
 
-            Link("View on GitHub", destination: URL(string: "https://github.com")!)
+            Link("View on GitHub", destination: URL(string: "https://github.com/MinhOmega/GitAccountSwitcher")!)
                 .buttonStyle(.link)
         }
         .padding()
