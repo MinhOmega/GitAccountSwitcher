@@ -9,6 +9,7 @@ final class GitConfigService {
         case gitNotFound
         case commandFailed(String)
         case parseError(String)
+        case validationError(String)
 
         var errorDescription: String? {
             switch self {
@@ -18,6 +19,8 @@ final class GitConfigService {
                 return "Git command failed: \(message)"
             case .parseError(let message):
                 return "Parse error: \(message)"
+            case .validationError(let message):
+                return "Validation error: \(message)"
             }
         }
     }
