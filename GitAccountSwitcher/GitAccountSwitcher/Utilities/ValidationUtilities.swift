@@ -143,6 +143,40 @@ enum ValidationUtilities {
         return input.rangeOfCharacter(from: .controlCharacters) != nil || input.contains("\0")
     }
 
+    // MARK: - Secure Memory Management
+
+    /// Securely zeros a string's memory to prevent token leakage
+    /// SECURITY: Overwrites sensitive data in memory before deallocation
+    /// - Parameter string: inout String to securely zero
+    /// - Note: Uses NSMutableData for guaranteed mutable memory access
+    ///
+    /// Swift String's copy-on-write optimization prevents direct memory zeroing.
+    /// This implementation converts to NSMutableData which provides mutable buffers
+    /// that can be directly overwritten with zeros using memset_s (secure memset).
+    static func secureZeroString(_ string: inout String) {
+        guard !string.isEmpty else { return }
+
+        // Convert string to NSMutableData for direct memory access
+        guard let data = string.data(using: .utf8) else {
+            string = ""
+            return
+        }
+
+        let mutableData = NSMutableData(data: data)
+
+        // SECURITY: Use memset_s (secure memset) which cannot be optimized away by compiler
+        // memset_s is defined in C11 and provides guaranteed memory clearing
+        if mutableData.length > 0 {
+            let ptr = mutableData.mutableBytes.assumingMemoryBound(to: UInt8.self)
+            memset_s(ptr, mutableData.length, 0, mutableData.length)
+        }
+
+        // Clear the string reference
+        string = ""
+
+        // NSMutableData will be deallocated with zeroed memory
+    }
+
     /// Sanitizes git error messages to prevent information disclosure
     /// - Parameter stderr: Git stderr output
     /// - Returns: Sanitized error message

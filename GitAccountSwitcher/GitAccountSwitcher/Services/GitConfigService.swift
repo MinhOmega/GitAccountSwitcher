@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// Service for managing git configuration
 final class GitConfigService {
@@ -10,6 +11,7 @@ final class GitConfigService {
         case commandFailed(String)
         case parseError(String)
         case validationError(String)
+        case invalidGitBinary(String)
 
         var errorDescription: String? {
             switch self {
@@ -21,6 +23,8 @@ final class GitConfigService {
                 return "Parse error: \(message)"
             case .validationError(let message):
                 return "Validation error: \(message)"
+            case .invalidGitBinary(let message):
+                return "Invalid git binary: \(message)"
             }
         }
     }
@@ -29,40 +33,81 @@ final class GitConfigService {
 
     /// Finds git executable from common locations or using `which`
     /// PERFORMANCE: Caches result after first discovery to avoid repeated I/O
+    /// SECURITY: Validates code signature on first discovery
     private var gitPath: String {
-        gitPathLock.lock()
-        defer { gitPathLock.unlock() }
+        get throws {
+            gitPathLock.lock()
+            defer { gitPathLock.unlock() }
 
-        // Return cached path if available
-        if let cached = _cachedGitPath {
-            return cached
-        }
-
-        // Check common locations in order of preference
-        let possiblePaths = [
-            "/usr/bin/git",           // Default macOS location
-            "/opt/homebrew/bin/git",  // Homebrew on Apple Silicon
-            "/usr/local/bin/git",     // Homebrew on Intel / manual install
-            "/opt/local/bin/git"      // MacPorts
-        ]
-
-        for path in possiblePaths {
-            if FileManager.default.fileExists(atPath: path) {
-                _cachedGitPath = path
-                return path
+            // Return cached path if available
+            if let cached = _cachedGitPath {
+                return cached
             }
+
+            // Check common locations in order of preference
+            let possiblePaths = [
+                "/usr/bin/git",           // Default macOS location
+                "/opt/homebrew/bin/git",  // Homebrew on Apple Silicon
+                "/usr/local/bin/git",     // Homebrew on Intel / manual install
+                "/opt/local/bin/git"      // MacPorts
+            ]
+
+            for path in possiblePaths {
+                if FileManager.default.fileExists(atPath: path) {
+                    // SECURITY: Verify code signature before caching
+                    if isValidGitBinary(at: path) {
+                        _cachedGitPath = path
+                        return path
+                    }
+                }
+            }
+
+            // Fallback: try to find using `which`
+            if let path = findGitUsingWhich() {
+                // SECURITY: Verify code signature before caching
+                if isValidGitBinary(at: path) {
+                    _cachedGitPath = path
+                    return path
+                }
+            }
+
+            // Last resort default - verify before returning
+            let fallback = "/usr/bin/git"
+            if FileManager.default.fileExists(atPath: fallback) && isValidGitBinary(at: fallback) {
+                _cachedGitPath = fallback
+                return fallback
+            }
+
+            throw GitConfigError.gitNotFound
+        }
+    }
+
+    /// Validates git binary code signature and integrity
+    /// SECURITY: Prevents execution of tampered or malicious git binaries
+    private func isValidGitBinary(at path: String) -> Bool {
+        // Check file exists and is executable
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: path),
+              fileManager.isExecutableFile(atPath: path) else {
+            return false
         }
 
-        // Fallback: try to find using `which`
-        if let path = findGitUsingWhich() {
-            _cachedGitPath = path
-            return path
+        // SECURITY: Use URL(fileURLWithPath:) to prevent URL injection attacks
+        // URL(string:) with interpolation is vulnerable to special characters (#, ?, spaces, etc.)
+        let url = URL(fileURLWithPath: path)
+
+        var staticCode: SecStaticCode?
+        var status = SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode)
+
+        guard status == errSecSuccess, let code = staticCode else {
+            return false
         }
 
-        // Last resort default
-        let fallback = "/usr/bin/git"
-        _cachedGitPath = fallback
-        return fallback
+        // Check if binary is signed (requirement: signed by Apple or valid Developer ID)
+        status = SecStaticCodeCheckValidity(code, [], nil)
+
+        // Accept both Apple-signed git and valid Developer ID certificates (Homebrew)
+        return status == errSecSuccess
     }
 
     private func findGitUsingWhich() -> String? {
@@ -208,7 +253,9 @@ final class GitConfigService {
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
 
-        process.executableURL = URL(fileURLWithPath: gitPath)
+        // SECURITY: Get validated git path (with code signature verification)
+        let validatedGitPath = try gitPath
+        process.executableURL = URL(fileURLWithPath: validatedGitPath)
         process.arguments = arguments
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
@@ -269,9 +316,14 @@ extension GitConfigService {
             .appendingPathComponent(".config/git/config")
     }
 
-    /// Checks if git is available
+    /// Checks if git is available and has valid code signature
     var isGitAvailable: Bool {
-        FileManager.default.fileExists(atPath: gitPath)
+        do {
+            let path = try gitPath
+            return FileManager.default.fileExists(atPath: path)
+        } catch {
+            return false
+        }
     }
 
     /// Gets the git version

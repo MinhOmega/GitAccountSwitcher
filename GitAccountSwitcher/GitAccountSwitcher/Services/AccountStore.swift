@@ -119,8 +119,66 @@ final class AccountStore: ObservableObject {
 
     // MARK: - Account Switching
 
+    /// Captures current system state for transaction rollback
+    private struct AccountSwitchSnapshot {
+        let previousGitHubCredential: (username: String, token: String)?
+        let previousGitConfig: (name: String?, email: String?)
+        let previousActiveAccountId: UUID?
+    }
+
+    /// Captures current state before account switch for rollback capability
+    private func captureCurrentState() async throws -> AccountSwitchSnapshot {
+        let previousCredential = try? keychainService.readGitHubCredential()
+        let previousConfig = try await gitConfigService.getCurrentConfigAsync()
+        let previousActiveId = activeAccount?.id
+
+        return AccountSwitchSnapshot(
+            previousGitHubCredential: previousCredential,
+            previousGitConfig: previousConfig,
+            previousActiveAccountId: previousActiveId
+        )
+    }
+
+    /// Rolls back to previous state after failed account switch
+    private func rollbackToState(_ snapshot: AccountSwitchSnapshot) async {
+        do {
+            // Rollback GitHub credential
+            if let credential = snapshot.previousGitHubCredential {
+                try keychainService.updateGitHubCredential(
+                    username: credential.username,
+                    token: credential.token
+                )
+            }
+
+            // Rollback git config
+            if let name = snapshot.previousGitConfig.name,
+               let email = snapshot.previousGitConfig.email {
+                try await gitConfigService.setGlobalUserConfigAsync(
+                    name: name,
+                    email: email
+                )
+            }
+
+            // Rollback active state in accounts
+            if let previousActiveId = snapshot.previousActiveAccountId {
+                for i in accounts.indices {
+                    accounts[i].isActive = accounts[i].id == previousActiveId
+                }
+                saveAccounts()
+            }
+
+            print("Successfully rolled back account switch to previous state")
+        } catch {
+            // ERROR HANDLING: Rollback failed - log error but don't throw
+            // System is now in inconsistent state and may require manual intervention
+            print("CRITICAL: Failed to rollback account switch: \(error.localizedDescription)")
+            lastError = AccountStoreError.persistenceError("Failed to rollback account switch: \(error.localizedDescription)")
+        }
+    }
+
     /// Switches to the specified account
     /// Uses task-based serialization to ensure only one switch operation runs at a time
+    /// RELIABILITY: Implements transaction pattern with automatic rollback on failure
     func switchToAccount(_ account: GitAccount) async throws {
         // Wait for any in-flight switch operation to complete
         // This provides proper serialization following Apple's concurrency best practices
@@ -135,9 +193,14 @@ final class AccountStore: ObservableObject {
                 isLoading = false
             }
 
+            // RELIABILITY: Capture current state for rollback
+            guard let snapshot = try? await captureCurrentState() else {
+                throw AccountStoreError.persistenceError("Failed to capture current state")
+            }
+
             do {
-                // Retrieve token from keychain
-                guard let token = try keychainService.retrieveAccountToken(for: account.id) else {
+                // SECURITY: Retrieve token from keychain with biometric authentication
+                guard let token = try await keychainService.retrieveAccountTokenWithAuth(for: account.id) else {
                     throw AccountStoreError.tokenNotFound
                 }
 
@@ -167,6 +230,8 @@ final class AccountStore: ObservableObject {
                 await refreshCurrentGitConfig()
 
             } catch {
+                // RELIABILITY: Rollback to previous state on any failure
+                await rollbackToState(snapshot)
                 lastError = error
                 throw error
             }
@@ -251,9 +316,15 @@ final class AccountStore: ObservableObject {
 extension AccountStore {
 
     /// Retrieves the full account with token for editing
-    func getAccountWithToken(_ account: GitAccount) throws -> GitAccount {
+    /// SECURITY: Requires biometric authentication before exposing token
+    /// - Parameter account: The account to retrieve token for
+    /// - Returns: Account with personalAccessToken populated
+    /// - Throws: KeychainError if token retrieval fails or authentication is denied
+    func getAccountWithToken(_ account: GitAccount) async throws -> GitAccount {
         var fullAccount = account
-        fullAccount.personalAccessToken = try keychainService.retrieveAccountToken(for: account.id) ?? ""
+        // SECURITY: Always require biometric authentication for token access
+        // This prevents unauthorized token viewing via the edit account flow
+        fullAccount.personalAccessToken = try await keychainService.retrieveAccountTokenWithAuth(for: account.id) ?? ""
         return fullAccount
     }
 }
