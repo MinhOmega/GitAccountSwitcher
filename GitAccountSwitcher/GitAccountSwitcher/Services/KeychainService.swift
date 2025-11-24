@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import LocalAuthentication
 
 /// Service for managing GitHub credentials in macOS Keychain
 final class KeychainService {
@@ -12,6 +13,7 @@ final class KeychainService {
         case unexpectedStatus(OSStatus)
         case invalidData
         case encodingFailed
+        case biometricAuthFailed(String)
 
         var errorDescription: String? {
             switch self {
@@ -28,6 +30,8 @@ final class KeychainService {
                 return "Invalid data format"
             case .encodingFailed:
                 return "Failed to encode data"
+            case .biometricAuthFailed(let message):
+                return "Biometric authentication failed: \(message)"
             }
         }
     }
@@ -40,6 +44,38 @@ final class KeychainService {
 
     static let shared = KeychainService()
     private init() {}
+
+    // MARK: - Biometric Authentication
+
+    /// Requests biometric authentication before accessing sensitive Keychain items
+    /// SECURITY: Adds an extra layer of protection for token retrieval
+    private func authenticateWithBiometrics(reason: String) async throws {
+        let context = LAContext()
+        var error: NSError?
+
+        // Check if biometric authentication is available
+        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) else {
+            // Fallback to password authentication if biometrics not available
+            guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
+                throw KeychainError.biometricAuthFailed("Authentication not available: \(error?.localizedDescription ?? "unknown error")")
+            }
+
+            // Use device password as fallback
+            do {
+                try await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)
+            } catch {
+                throw KeychainError.biometricAuthFailed("Password authentication failed: \(error.localizedDescription)")
+            }
+            return
+        }
+
+        // Evaluate biometric policy
+        do {
+            try await context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason)
+        } catch {
+            throw KeychainError.biometricAuthFailed(error.localizedDescription)
+        }
+    }
 
     // MARK: - Read GitHub Credential
 
@@ -322,6 +358,16 @@ extension KeychainService {
         }
 
         return token
+    }
+
+    /// Retrieves account token with biometric authentication (async version)
+    /// SECURITY: Requires biometric or device password authentication before token retrieval
+    func retrieveAccountTokenWithAuth(for accountId: UUID) async throws -> String? {
+        // SECURITY: Request biometric authentication before accessing token
+        try await authenticateWithBiometrics(reason: "Authenticate to access GitHub account token")
+
+        // After successful authentication, retrieve token
+        return try retrieveAccountToken(for: accountId)
     }
 
     /// Deletes account token from app's Keychain storage
