@@ -2,9 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Show in Dock - allows proper window focus -->
+    <!-- Hide from Dock - Menu bar app only -->
     <key>LSUIElement</key>
-    <false/>
+    <true/>
 
     <!-- App info -->
     <key>CFBundleName</key>

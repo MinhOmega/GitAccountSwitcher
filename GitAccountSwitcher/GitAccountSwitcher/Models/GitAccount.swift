@@ -82,6 +82,32 @@ extension GitAccount: Codable {
     }
 }
 
+// MARK: - Debug String (Security)
+
+extension GitAccount: CustomDebugStringConvertible, CustomStringConvertible {
+    /// String representation that redacts sensitive token data
+    var description: String {
+        "GitAccount(displayName: \(displayName), username: @\(githubUsername))"
+    }
+
+    /// Debug description that shows all fields except the sensitive token
+    var debugDescription: String {
+        """
+        GitAccount {
+            id: \(id.uuidString)
+            displayName: \(displayName)
+            githubUsername: @\(githubUsername)
+            personalAccessToken: [REDACTED]
+            gitUserName: \(gitUserName)
+            gitUserEmail: \(gitUserEmail)
+            isActive: \(isActive)
+            createdAt: \(createdAt)
+            lastUsedAt: \(lastUsedAt?.description ?? "nil")
+        }
+        """
+    }
+}
+
 // MARK: - Preview/Testing Support
 extension GitAccount {
     static let preview = GitAccount(

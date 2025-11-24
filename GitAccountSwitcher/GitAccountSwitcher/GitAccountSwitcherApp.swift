@@ -4,7 +4,6 @@ import ServiceManagement
 
 @main
 struct GitAccountSwitcherApp: App {
-
     @StateObject private var accountStore = AccountStore()
     @State private var showingAddAccount = false
 
@@ -490,6 +489,7 @@ struct MenuBarContentView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundColor(.secondary)
+                .help("Quit Git Account Switcher")
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
@@ -523,12 +523,21 @@ struct MenuBarContentView: View {
     }
 
     private func openMainWindow() {
-        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" }) {
+        // For menu bar apps, we need to activate the app first
+        NSApp.activate(ignoringOtherApps: true)
+
+        // Find the main window by identifier or title
+        if let window = NSApp.windows.first(where: {
+            $0.identifier?.rawValue == "main" || $0.title == "Git Account Switcher"
+        }) {
             window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+        } else if let window = NSApp.windows.first(where: { $0.canBecomeMain }) {
+            // Fall back to any window that can become main
+            window.makeKeyAndOrderFront(nil)
         } else {
-            // Open window via WindowGroup
-            NSApp.sendAction(Selector(("showWindow:")), to: nil, from: nil)
+            // As a last resort, try to trigger window creation
+            // This works because we have a Window scene defined in the app
+            NSApp.sendAction(#selector(NSWindowController.showWindow(_:)), to: nil, from: nil)
         }
     }
 }

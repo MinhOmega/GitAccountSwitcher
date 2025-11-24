@@ -28,7 +28,16 @@ final class GitConfigService {
     // MARK: - Git Path Discovery
 
     /// Finds git executable from common locations or using `which`
+    /// PERFORMANCE: Caches result after first discovery to avoid repeated I/O
     private var gitPath: String {
+        gitPathLock.lock()
+        defer { gitPathLock.unlock() }
+
+        // Return cached path if available
+        if let cached = _cachedGitPath {
+            return cached
+        }
+
         // Check common locations in order of preference
         let possiblePaths = [
             "/usr/bin/git",           // Default macOS location
@@ -39,17 +48,21 @@ final class GitConfigService {
 
         for path in possiblePaths {
             if FileManager.default.fileExists(atPath: path) {
+                _cachedGitPath = path
                 return path
             }
         }
 
         // Fallback: try to find using `which`
         if let path = findGitUsingWhich() {
+            _cachedGitPath = path
             return path
         }
 
         // Last resort default
-        return "/usr/bin/git"
+        let fallback = "/usr/bin/git"
+        _cachedGitPath = fallback
+        return fallback
     }
 
     private func findGitUsingWhich() -> String? {
@@ -77,6 +90,11 @@ final class GitConfigService {
 
     static let shared = GitConfigService()
     private init() {}
+
+    // MARK: - Git Path Caching
+
+    private var _cachedGitPath: String?
+    private let gitPathLock = NSLock()
 
     // MARK: - Input Validation
 
@@ -194,6 +212,18 @@ final class GitConfigService {
         process.arguments = arguments
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
+
+        // SECURITY: Sanitize environment to prevent command injection
+        // Restrict to essential variables only, blocking dangerous vars like:
+        // GIT_SSH_COMMAND, GIT_EXEC_PATH, core.editor, core.pager
+        process.environment = [
+            "HOME": FileManager.default.homeDirectoryForCurrentUser.path,
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "LANG": "en_US.UTF-8",
+            "GIT_CONFIG_NOSYSTEM": "1",      // Disable system-level config
+            "GIT_TERMINAL_PROMPT": "0",      // Disable interactive prompts
+            "GIT_ASKPASS": "/bin/echo"       // Prevent credential prompts
+        ]
 
         do {
             try process.run()

@@ -7,7 +7,12 @@ final class AccountStore: ObservableObject {
 
     // MARK: - Published Properties
 
-    @Published private(set) var accounts: [GitAccount] = []
+    @Published private(set) var accounts: [GitAccount] = [] {
+        didSet {
+            // PERFORMANCE: Invalidate active account cache when accounts array changes
+            _cachedActiveAccount = nil
+        }
+    }
     @Published private(set) var isLoading = false
     @Published private(set) var lastError: Error?
     @Published private(set) var currentGitConfig: (name: String?, email: String?) = (nil, nil)
@@ -27,10 +32,23 @@ final class AccountStore: ObservableObject {
 
     private let accountsStorageKey = "savedAccounts"
 
+    // MARK: - Performance Cache
+
+    /// Cache for active account lookup to avoid O(n) search on every access
+    /// Invalidated automatically via accounts.didSet
+    private var _cachedActiveAccount: GitAccount?
+
     // MARK: - Computed Properties
 
     var activeAccount: GitAccount? {
-        accounts.first(where: { $0.isActive })
+        // PERFORMANCE: Cache active account lookup for O(1) access
+        if let cached = _cachedActiveAccount {
+            return cached
+        }
+
+        let active = accounts.first(where: { $0.isActive })
+        _cachedActiveAccount = active
+        return active
     }
 
     var hasAccounts: Bool {
@@ -176,18 +194,33 @@ final class AccountStore: ObservableObject {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
 
-        guard let data = try? encoder.encode(accounts) else { return }
-        UserDefaults.standard.set(data, forKey: accountsStorageKey)
+        do {
+            let data = try encoder.encode(accounts)
+            UserDefaults.standard.set(data, forKey: accountsStorageKey)
+        } catch {
+            // ERROR HANDLING: Log encoding failure and set lastError for UI feedback
+            lastError = AccountStoreError.persistenceError("Failed to save accounts: \(error.localizedDescription)")
+            print("ERROR: Failed to encode accounts for persistence: \(error)")
+        }
     }
 
     private func loadAccounts() {
-        guard let data = UserDefaults.standard.data(forKey: accountsStorageKey) else { return }
+        guard let data = UserDefaults.standard.data(forKey: accountsStorageKey) else {
+            // No saved data is not an error - fresh install
+            return
+        }
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
-        guard let loaded = try? decoder.decode([GitAccount].self, from: data) else { return }
-        accounts = loaded
+        do {
+            accounts = try decoder.decode([GitAccount].self, from: data)
+        } catch {
+            // ERROR HANDLING: Log decoding failure but don't crash - start with empty state
+            lastError = AccountStoreError.persistenceError("Failed to load accounts: \(error.localizedDescription)")
+            print("ERROR: Failed to decode saved accounts: \(error)")
+            accounts = []
+        }
     }
 
     // MARK: - Error Types
@@ -196,6 +229,7 @@ final class AccountStore: ObservableObject {
         case tokenNotFound
         case accountNotFound
         case duplicateAccount(String)
+        case persistenceError(String)
 
         var errorDescription: String? {
             switch self {
@@ -205,6 +239,8 @@ final class AccountStore: ObservableObject {
                 return "Account not found"
             case .duplicateAccount(let username):
                 return "An account with GitHub username '\(username)' already exists"
+            case .persistenceError(let message):
+                return message
             }
         }
     }
