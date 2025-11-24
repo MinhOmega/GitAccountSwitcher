@@ -29,6 +29,7 @@
 - **Native Notifications** - Get notified when account switches complete
 - **No Dock Icon** - Runs as a background utility (menu bar only)
 - **Dark Mode Support** - Follows your system appearance
+- **Transparent Icons** - App icons with 100% transparent backgrounds for a professional look
 
 ## Requirements
 
@@ -46,17 +47,41 @@
 git clone https://github.com/MinhOmega/GitAccountSwitcher.git
 cd GitAccountSwitcher/GitAccountSwitcher
 
+# Clean any previous builds (recommended for fresh builds)
+xcodebuild -project GitAccountSwitcher.xcodeproj \
+  -scheme GitAccountSwitcher \
+  clean
+
+# Clear derived data cache (ensures clean build)
+rm -rf ~/Library/Developer/Xcode/DerivedData/GitAccountSwitcher-*
+
 # Build the app (Release configuration)
 xcodebuild -project GitAccountSwitcher.xcodeproj \
   -scheme GitAccountSwitcher \
   -configuration Release \
-  -derivedDataPath build \
   build
 
+# Find the built app
+APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData/GitAccountSwitcher-*/Build/Products/Release -name "GitAccountSwitcher.app" -type d | head -1)
+
+# Remove old version if exists
+rm -rf /Applications/GitAccountSwitcher.app
+
 # Copy to Applications folder
-cp -R build/Build/Products/Release/GitAccountSwitcher.app /Applications/
+cp -R "$APP_PATH" /Applications/
 
 # Launch the app
+open /Applications/GitAccountSwitcher.app
+```
+
+**Quick One-Liner (Clean Build & Install):**
+```bash
+cd GitAccountSwitcher/GitAccountSwitcher && \
+xcodebuild -project GitAccountSwitcher.xcodeproj -scheme GitAccountSwitcher clean && \
+rm -rf ~/Library/Developer/Xcode/DerivedData/GitAccountSwitcher-* && \
+xcodebuild -project GitAccountSwitcher.xcodeproj -scheme GitAccountSwitcher -configuration Release build && \
+rm -rf /Applications/GitAccountSwitcher.app && \
+cp -R ~/Library/Developer/Xcode/DerivedData/GitAccountSwitcher-*/Build/Products/Release/GitAccountSwitcher.app /Applications/ && \
 open /Applications/GitAccountSwitcher.app
 ```
 

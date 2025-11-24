@@ -23,31 +23,61 @@ A native macOS menu bar application that allows users to quickly switch between 
 - Personal Access Token (PAT) secure storage
 - Launch at login support
 - Native macOS notifications
+- Transparent app icons (100% transparent backgrounds)
 
 ## Build & Commands
+
+### Project File Management with XcodeGen
+
+This project uses **XcodeGen** to automatically generate the Xcode project from `project.yml`. This means:
+
+- ✅ **No manual file syncing needed** - All Swift files in `GitAccountSwitcher/` are automatically included
+- ✅ **Better version control** - The `.xcodeproj` is gitignored; only `project.yml` is tracked
+- ✅ **Create files anywhere** - VSCode, command line, or Xcode - all work seamlessly
+
+**When you add/remove files outside of Xcode, regenerate the project:**
+
+```bash
+# Quick sync (recommended)
+./sync-project.sh
+
+# Or manually
+xcodegen generate
+
+# Or if you're in the GitAccountSwitcher subdirectory
+cd .. && xcodegen generate && cd GitAccountSwitcher
+```
+
+**The project is automatically regenerated when you:**
+- Add new `.swift` files via CLI or VSCode
+- Delete files
+- Reorganize directory structure
 
 ### Xcode Build Commands
 
 ```bash
 # Open project in Xcode
-open GitAccountSwitcher/GitAccountSwitcher.xcodeproj
+open GitAccountSwitcher.xcodeproj
+
+# Clean build (recommended before rebuilding)
+xcodebuild -project GitAccountSwitcher.xcodeproj \
+  -scheme GitAccountSwitcher \
+  clean
+
+# Clear derived data cache (for fresh builds)
+rm -rf ~/Library/Developer/Xcode/DerivedData/GitAccountSwitcher-*
 
 # Build from command line (Debug)
-xcodebuild -project GitAccountSwitcher/GitAccountSwitcher.xcodeproj \
+xcodebuild -project GitAccountSwitcher.xcodeproj \
   -scheme GitAccountSwitcher \
   -configuration Debug \
   build
 
 # Build from command line (Release)
-xcodebuild -project GitAccountSwitcher/GitAccountSwitcher.xcodeproj \
+xcodebuild -project GitAccountSwitcher.xcodeproj \
   -scheme GitAccountSwitcher \
   -configuration Release \
   build
-
-# Clean build folder
-xcodebuild -project GitAccountSwitcher/GitAccountSwitcher.xcodeproj \
-  -scheme GitAccountSwitcher \
-  clean
 
 # Build and run (use Xcode: Cmd+R)
 ```
@@ -55,6 +85,42 @@ xcodebuild -project GitAccountSwitcher/GitAccountSwitcher.xcodeproj \
 ### Build Output Location
 - Debug: `~/Library/Developer/Xcode/DerivedData/GitAccountSwitcher-xxx/Build/Products/Debug/GitAccountSwitcher.app`
 - Release: `~/Library/Developer/Xcode/DerivedData/GitAccountSwitcher-xxx/Build/Products/Release/GitAccountSwitcher.app`
+
+### Install to Applications Folder
+
+After building, copy the app to /Applications:
+
+```bash
+# Find the built app
+APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData/GitAccountSwitcher-*/Build/Products/Release -name "GitAccountSwitcher.app" -type d | head -1)
+
+# Remove old version if exists
+rm -rf /Applications/GitAccountSwitcher.app
+
+# Copy to Applications
+cp -R "$APP_PATH" /Applications/
+
+# Launch the app
+open /Applications/GitAccountSwitcher.app
+```
+
+**Complete Clean Build & Install Process:**
+
+```bash
+# All-in-one: Clean, build, and install
+xcodebuild -project GitAccountSwitcher.xcodeproj -scheme GitAccountSwitcher clean && \
+rm -rf ~/Library/Developer/Xcode/DerivedData/GitAccountSwitcher-* && \
+xcodebuild -project GitAccountSwitcher.xcodeproj -scheme GitAccountSwitcher -configuration Release build && \
+rm -rf /Applications/GitAccountSwitcher.app && \
+cp -R ~/Library/Developer/Xcode/DerivedData/GitAccountSwitcher-*/Build/Products/Release/GitAccountSwitcher.app /Applications/ && \
+open /Applications/GitAccountSwitcher.app
+```
+
+This ensures:
+- Clean slate (no cached build artifacts)
+- Fresh build with latest icon changes
+- Proper installation to Applications folder
+- Automatic app launch
 
 ### Requirements Verification
 

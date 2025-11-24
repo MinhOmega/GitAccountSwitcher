@@ -235,10 +235,7 @@ struct AddEditAccountView: View {
         ]
 
         for (input, fieldName) in inputs {
-            guard input.rangeOfCharacter(from: .controlCharacters) == nil else {
-                throw ValidationError.invalidCharacters(fieldName)
-            }
-            guard !input.contains("\0") else {
+            guard !ValidationUtilities.containsControlCharacters(input) else {
                 throw ValidationError.invalidCharacters(fieldName)
             }
         }
@@ -258,8 +255,7 @@ struct AddEditAccountView: View {
         }
 
         // Validate GitHub username format
-        let githubRegex = #"^[a-zA-Z0-9](?:[a-zA-Z0-9]|-(?=[a-zA-Z0-9])){0,38}$"#
-        guard githubUsername.range(of: githubRegex, options: .regularExpression) != nil else {
+        guard ValidationUtilities.isValidGitHubUsername(githubUsername) else {
             throw ValidationError.invalidGitHubUsername
         }
 
@@ -276,30 +272,12 @@ struct AddEditAccountView: View {
 
     /// Validates email format
     private func isValidEmail(_ email: String) -> Bool {
-        let emailRegex = #"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"#
-        return email.range(of: emailRegex, options: .regularExpression) != nil
+        return ValidationUtilities.isValidEmail(email)
     }
 
     /// Validates GitHub Personal Access Token format
     private func isValidGitHubToken(_ token: String) -> Bool {
-        let trimmed = token.trimmingCharacters(in: .whitespaces)
-
-        // Check for classic PAT format: ghp_[40 alphanumeric chars]
-        if trimmed.hasPrefix("ghp_") {
-            let suffix = trimmed.dropFirst(4)
-            return suffix.count == 40 && suffix.allSatisfy { $0.isLetter || $0.isNumber }
-        }
-
-        // Check for fine-grained PAT format: github_pat_[82+ base62 encoded chars]
-        if trimmed.hasPrefix("github_pat_") {
-            let suffix = trimmed.dropFirst(11)
-            let base62Chars = CharacterSet(charactersIn: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_")
-            return suffix.count >= 82 && suffix.rangeOfCharacter(from: base62Chars.inverted) == nil
-        }
-
-        // For backwards compatibility or future token formats, accept any token >= 20 chars
-        // that contains only alphanumeric and underscores
-        return trimmed.count >= 20 && trimmed.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
+        return ValidationUtilities.isValidGitHubToken(token)
     }
 
     // MARK: - Actions
