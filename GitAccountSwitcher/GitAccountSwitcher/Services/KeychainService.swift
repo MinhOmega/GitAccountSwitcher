@@ -132,7 +132,11 @@ final class KeychainService {
             kSecAttrAccount as String: username,
             kSecValueData as String: tokenData,
             kSecAttrLabel as String: "github.com (\(username))",
-            kSecAttrComment as String: "GitHub Personal Access Token - Managed by GitAccountSwitcher"
+            kSecAttrComment as String: "GitHub Personal Access Token - Managed by GitAccountSwitcher",
+            // SECURITY: Only accessible when device is unlocked, non-migratable
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+            // SECURITY: Prevent iCloud Keychain sync - tokens stay local
+            kSecAttrSynchronizable as String: false
         ]
 
         let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
@@ -164,7 +168,10 @@ final class KeychainService {
         let updateAttributes: [String: Any] = [
             kSecValueData as String: tokenData,
             kSecAttrLabel as String: "github.com (\(username))",
-            kSecAttrComment as String: "GitHub Personal Access Token - Managed by GitAccountSwitcher"
+            kSecAttrComment as String: "GitHub Personal Access Token - Managed by GitAccountSwitcher",
+            // SECURITY: Maintain security attributes on update
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+            kSecAttrSynchronizable as String: false
         ]
 
         let updateStatus = SecItemUpdate(updateQuery as CFDictionary, updateAttributes as CFDictionary)
@@ -252,6 +259,8 @@ extension KeychainService {
         // Try to add first with security attributes
         var addQuery = query
         addQuery[kSecValueData as String] = tokenData
+        addQuery[kSecAttrLabel as String] = "GitAccountSwitcher (\(accountId.uuidString.prefix(8)))"
+        addQuery[kSecAttrComment as String] = "GitHub Personal Access Token - Managed by GitAccountSwitcher"
         // SECURITY: Only accessible when device is unlocked, non-migratable
         addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         // SECURITY: Prevent iCloud Keychain sync - tokens stay local
@@ -267,6 +276,8 @@ extension KeychainService {
         if addStatus == errSecDuplicateItem {
             let updateAttributes: [String: Any] = [
                 kSecValueData as String: tokenData,
+                kSecAttrLabel as String: "GitAccountSwitcher (\(accountId.uuidString.prefix(8)))",
+                kSecAttrComment as String: "GitHub Personal Access Token - Managed by GitAccountSwitcher",
                 // SECURITY: Maintain security attributes on update
                 kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
                 kSecAttrSynchronizable as String: false

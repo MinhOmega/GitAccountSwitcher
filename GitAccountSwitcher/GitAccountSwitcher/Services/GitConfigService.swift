@@ -82,42 +82,18 @@ final class GitConfigService {
 
     /// Validates and sanitizes git config values to prevent injection attacks
     private func validateConfigValue(_ value: String, field: String) throws -> String {
-        // SECURITY: Check for control characters (including newlines, tabs, null bytes)
-        // These could be used to inject arbitrary git configuration
-        let controlCharacters = CharacterSet.controlCharacters
-        if value.rangeOfCharacter(from: controlCharacters) != nil {
-            throw GitConfigError.validationError("\(field) contains invalid control characters")
+        do {
+            return try ValidationUtilities.validateGitConfigValue(value, field: field)
+        } catch let error as ValidationUtilities.ValidationError {
+            throw GitConfigError.validationError(error.localizedDescription)
         }
-
-        // SECURITY: Check for git special characters that could affect config parsing
-        let dangerousChars = CharacterSet(charactersIn: "[]")
-        if value.rangeOfCharacter(from: dangerousChars) != nil {
-            throw GitConfigError.validationError("\(field) contains invalid characters")
-        }
-
-        // Enforce reasonable length limits (git config has internal limits)
-        guard value.count <= 255 else {
-            throw GitConfigError.validationError("\(field) exceeds maximum length (255 characters)")
-        }
-
-        // Must not be empty or only whitespace
-        let trimmed = value.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else {
-            throw GitConfigError.validationError("\(field) cannot be empty")
-        }
-
-        return value
     }
 
     /// Validates email format (RFC 5322 basic compliance)
     private func validateEmail(_ email: String) throws -> String {
         let validated = try validateConfigValue(email, field: "email")
 
-        // Basic email regex validation
-        let emailRegex = #"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"#
-        let emailPredicate = NSPredicate(format: "SELF MATCHES %@", emailRegex)
-
-        guard emailPredicate.evaluate(with: validated) else {
+        guard ValidationUtilities.isValidEmail(validated) else {
             throw GitConfigError.validationError("Invalid email format")
         }
 
@@ -126,17 +102,10 @@ final class GitConfigService {
 
     /// Validates git config keys to prevent path traversal
     private func validateConfigKey(_ key: String) throws {
-        // Git config key format: section.subsection.key
-        let keyRegex = #"^[a-zA-Z][a-zA-Z0-9-]*(\.[a-zA-Z][a-zA-Z0-9-]*)*$"#
-        let keyPredicate = NSPredicate(format: "SELF MATCHES %@", keyRegex)
-
-        guard keyPredicate.evaluate(with: key) else {
-            throw GitConfigError.validationError("Invalid config key format")
-        }
-
-        // SECURITY: Prevent path traversal attempts
-        guard !key.contains("..") && !key.contains("/") && !key.contains("\\") else {
-            throw GitConfigError.validationError("Config key contains invalid path characters")
+        do {
+            try ValidationUtilities.validateGitConfigKey(key)
+        } catch let error as ValidationUtilities.ValidationError {
+            throw GitConfigError.validationError(error.localizedDescription)
         }
     }
 
@@ -250,33 +219,7 @@ final class GitConfigService {
 
     /// Sanitizes git error messages to prevent information disclosure
     private func sanitizeGitError(_ stderr: String, arguments: [String]) -> String {
-        if stderr.isEmpty {
-            return "Git command failed"
-        }
-
-        // SECURITY: Remove file paths that could leak system information
-        var sanitized = stderr.replacingOccurrences(
-            of: #"/Users/[^/\s']+"#,
-            with: "[HOME]",
-            options: .regularExpression
-        )
-
-        sanitized = sanitized.replacingOccurrences(
-            of: #"~[^/\s']*"#,
-            with: "[HOME]",
-            options: .regularExpression
-        )
-
-        // Return generic messages for common errors
-        if sanitized.contains("permission denied") {
-            return "Permission denied accessing git config"
-        }
-        if sanitized.contains("not found") {
-            return "Git config key not found"
-        }
-
-        // Generic error with command context
-        return "Git config operation failed"
+        return ValidationUtilities.sanitizeGitError(stderr)
     }
 }
 
@@ -312,31 +255,20 @@ extension GitConfigService {
 extension GitConfigService {
 
     /// Async version of setGlobalUserConfig
+    /// Uses Task.detached following Apple's modern concurrency best practices
     func setGlobalUserConfigAsync(name: String, email: String) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            DispatchQueue.global(qos: .userInitiated).async {
-                do {
-                    try self.setGlobalUserConfig(name: name, email: email)
-                    continuation.resume()
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
-        }
+        try await Task.detached(priority: .userInitiated) {
+            try self.setGlobalUserConfig(name: name, email: email)
+        }.value
     }
 
     /// Async version of getCurrentConfig
+    /// Uses Task.detached following Apple's modern concurrency best practices
     func getCurrentConfigAsync() async throws -> (name: String?, email: String?) {
-        try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                do {
-                    let name = try self.getGlobalUserName()
-                    let email = try self.getGlobalUserEmail()
-                    continuation.resume(returning: (name, email))
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
-        }
+        try await Task.detached(priority: .userInitiated) {
+            let name = try self.getGlobalUserName()
+            let email = try self.getGlobalUserEmail()
+            return (name, email)
+        }.value
     }
 }

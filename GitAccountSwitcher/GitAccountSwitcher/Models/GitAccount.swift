@@ -1,7 +1,8 @@
 import Foundation
 
 /// Represents a GitHub account configuration for switching
-struct GitAccount: Identifiable, Equatable, Hashable {
+/// Conforms to Sendable for safe usage across actor boundaries (Swift 6 compatibility)
+struct GitAccount: Identifiable, Equatable, Hashable, Sendable {
     var id: UUID
     var displayName: String       // e.g., "Personal", "Work"
     var githubUsername: String    // GitHub account username

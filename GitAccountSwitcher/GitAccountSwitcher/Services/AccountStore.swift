@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 /// Observable store for managing GitHub accounts
-@MainActor
+@MainActor @preconcurrency
 final class AccountStore: ObservableObject {
 
     // MARK: - Published Properties
@@ -19,8 +19,9 @@ final class AccountStore: ObservableObject {
 
     // MARK: - Concurrency Control
 
-    private let switchLock = NSLock()
-    private var isSwitching = false
+    /// Task handle for the current account switch operation
+    /// Ensures serial execution: new switches wait for the previous to complete
+    private var currentSwitchTask: Task<Void, Error>?
 
     // MARK: - Storage Keys
 
@@ -101,61 +102,63 @@ final class AccountStore: ObservableObject {
     // MARK: - Account Switching
 
     /// Switches to the specified account
+    /// Uses task-based serialization to ensure only one switch operation runs at a time
     func switchToAccount(_ account: GitAccount) async throws {
-        // SECURITY: Prevent concurrent switch operations that could cause state corruption
-        switchLock.lock()
-        if isSwitching {
-            switchLock.unlock()
-            throw AccountStoreError.switchInProgress
-        }
-        isSwitching = true
-        switchLock.unlock()
+        // Wait for any in-flight switch operation to complete
+        // This provides proper serialization following Apple's concurrency best practices
+        _ = try? await currentSwitchTask?.value
 
-        isLoading = true
-        lastError = nil
+        // Create new switch task
+        let switchTask = Task { @MainActor in
+            isLoading = true
+            lastError = nil
 
-        defer {
-            isLoading = false
-            switchLock.lock()
-            isSwitching = false
-            switchLock.unlock()
-        }
-
-        do {
-            // Retrieve token from keychain
-            guard let token = try keychainService.retrieveAccountToken(for: account.id) else {
-                throw AccountStoreError.tokenNotFound
+            defer {
+                isLoading = false
             }
 
-            // Update GitHub Keychain credential
-            try keychainService.updateGitHubCredential(
-                username: account.githubUsername,
-                token: token
-            )
-
-            // Update git config
-            try await gitConfigService.setGlobalUserConfigAsync(
-                name: account.gitUserName,
-                email: account.gitUserEmail
-            )
-
-            // Update active state in store (atomic update protected by MainActor)
-            for i in accounts.indices {
-                accounts[i].isActive = accounts[i].id == account.id
-                if accounts[i].id == account.id {
-                    accounts[i].lastUsedAt = Date()
+            do {
+                // Retrieve token from keychain
+                guard let token = try keychainService.retrieveAccountToken(for: account.id) else {
+                    throw AccountStoreError.tokenNotFound
                 }
+
+                // Update GitHub Keychain credential
+                try keychainService.updateGitHubCredential(
+                    username: account.githubUsername,
+                    token: token
+                )
+
+                // Update git config
+                try await gitConfigService.setGlobalUserConfigAsync(
+                    name: account.gitUserName,
+                    email: account.gitUserEmail
+                )
+
+                // Update active state in store (atomic update protected by MainActor)
+                for i in accounts.indices {
+                    accounts[i].isActive = accounts[i].id == account.id
+                    if accounts[i].id == account.id {
+                        accounts[i].lastUsedAt = Date()
+                    }
+                }
+
+                saveAccounts()
+
+                // Refresh current config
+                await refreshCurrentGitConfig()
+
+            } catch {
+                lastError = error
+                throw error
             }
-
-            saveAccounts()
-
-            // Refresh current config
-            await refreshCurrentGitConfig()
-
-        } catch {
-            lastError = error
-            throw error
         }
+
+        // Store task reference for serialization
+        currentSwitchTask = switchTask
+
+        // Await completion and propagate any errors
+        try await switchTask.value
     }
 
     /// Refreshes the current git configuration
@@ -193,7 +196,6 @@ final class AccountStore: ObservableObject {
         case tokenNotFound
         case accountNotFound
         case duplicateAccount(String)
-        case switchInProgress
 
         var errorDescription: String? {
             switch self {
@@ -203,8 +205,6 @@ final class AccountStore: ObservableObject {
                 return "Account not found"
             case .duplicateAccount(let username):
                 return "An account with GitHub username '\(username)' already exists"
-            case .switchInProgress:
-                return "Another account switch is already in progress. Please wait."
             }
         }
     }
