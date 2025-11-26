@@ -43,35 +43,41 @@ enum ValidationUtilities {
 
     /// Validates GitHub Personal Access Token format
     /// Supports:
-    /// - Classic PAT: ghp_[40 alphanumeric chars]
-    /// - Fine-grained PAT: github_pat_[82+ base62 chars]
+    /// - Classic PAT: ghp_[36 alphanumeric chars] (total 40 chars)
+    /// - Fine-grained PAT: github_pat_[22 char prefix]_[36 alphanumeric chars]
     /// - Fallback: 20+ chars with minimum entropy
     /// - Parameter token: GitHub PAT to validate
     /// - Returns: True if token is valid
     static func isValidGitHubToken(_ token: String) -> Bool {
         let trimmed = token.trimmingCharacters(in: .whitespaces)
 
-        // Check for classic PAT format: ghp_[40 alphanumeric chars]
+        // Check for classic PAT format: ghp_[36 alphanumeric chars] (total 40 chars)
         if trimmed.hasPrefix("ghp_") {
             let suffix = trimmed.dropFirst(4)
-            return suffix.count == 40 && suffix.allSatisfy { $0.isLetter || $0.isNumber }
+            // Classic PATs have 36 alphanumeric characters after "ghp_"
+            return suffix.count == 36 && suffix.allSatisfy { $0.isLetter || $0.isNumber }
         }
 
-        // Check for fine-grained PAT format: github_pat_[82+ base62 encoded chars]
+        // Check for fine-grained PAT format: github_pat_[22 char user/install ID]_[36 alphanumeric chars]
+        // Total length is typically 93 characters (11 + 22 + 1 + 59 or similar)
         if trimmed.hasPrefix("github_pat_") {
             let suffix = trimmed.dropFirst(11)
-            let base62Chars = CharacterSet(charactersIn: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_")
-            return suffix.count >= 82 && suffix.rangeOfCharacter(from: base62Chars.inverted) == nil
+            let validChars = CharacterSet(charactersIn: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_")
+            // Fine-grained PATs vary in length but are typically 80+ chars after prefix
+            return suffix.count >= 50 && suffix.rangeOfCharacter(from: validChars.inverted) == nil
         }
 
-        // For backwards compatibility or future token formats
-        // SECURITY: Require minimum entropy to prevent weak tokens
-        if trimmed.count >= 20 && trimmed.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" }) {
-            let uniqueChars = Set(trimmed)
+        // For backwards compatibility or other token formats (OAuth tokens, etc.)
+        // Accept tokens that are 20+ characters with reasonable complexity
+        if trimmed.count >= 20 {
+            let validChars = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_-"))
+            guard trimmed.rangeOfCharacter(from: validChars.inverted) == nil else {
+                return false
+            }
+            // Require mix of character types for security
             let hasLetters = trimmed.contains(where: { $0.isLetter })
             let hasNumbers = trimmed.contains(where: { $0.isNumber })
-            // Require at least 10 unique characters and mix of letters and numbers
-            return uniqueChars.count >= 10 && hasLetters && hasNumbers
+            return hasLetters && hasNumbers
         }
 
         return false

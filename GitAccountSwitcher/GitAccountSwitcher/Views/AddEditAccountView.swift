@@ -84,12 +84,29 @@ struct AddEditAccountView: View {
     @State private var saveError: Error?
     @State private var showingError = false
     @State private var showingTokenHelp = false
+    @State private var originalToken = "" // Track original token for edit mode
 
-    // Validation
+    // MARK: - Token Validation Helper
+
+    /// Checks if token is valid, considering edit mode where unchanged tokens are accepted
+    private var isTokenValidForSave: Bool {
+        let trimmedToken = personalAccessToken.trimmingCharacters(in: .whitespaces)
+
+        // In edit mode, accept unchanged non-empty token without format validation
+        if case .edit = mode, trimmedToken == originalToken, !trimmedToken.isEmpty {
+            return true
+        }
+
+        // Otherwise, validate token format
+        return isValidGitHubToken(trimmedToken)
+    }
+
+    // MARK: - Form Validation
+
     private var isValid: Bool {
         !displayName.trimmingCharacters(in: .whitespaces).isEmpty &&
         !githubUsername.trimmingCharacters(in: .whitespaces).isEmpty &&
-        isValidGitHubToken(personalAccessToken.trimmingCharacters(in: .whitespaces)) &&
+        isTokenValidForSave &&
         !gitUserName.trimmingCharacters(in: .whitespaces).isEmpty &&
         !gitUserEmail.trimmingCharacters(in: .whitespaces).isEmpty &&
         isValidEmail(gitUserEmail.trimmingCharacters(in: .whitespaces))
@@ -331,8 +348,8 @@ struct AddEditAccountView: View {
             throw ValidationError.invalidEmail
         }
 
-        // Validate token format
-        guard isValidGitHubToken(personalAccessToken) else {
+        // Validate token format (reuses isTokenValidForSave logic)
+        guard isTokenValidForSave else {
             throw ValidationError.invalidToken
         }
     }
@@ -356,20 +373,10 @@ struct AddEditAccountView: View {
         githubUsername = account.githubUsername
         gitUserName = account.gitUserName
         gitUserEmail = account.gitUserEmail
-
-        // SECURITY: Load token from keychain with biometric authentication
-        Task {
-            do {
-                let fullAccount = try await accountStore.getAccountWithToken(account)
-                await MainActor.run {
-                    personalAccessToken = fullAccount.personalAccessToken
-                }
-            } catch {
-                // Authentication failed or token not found
-                // Leave personalAccessToken empty - user can re-enter if needed
-                print("Failed to load token for editing: \(error.localizedDescription)")
-            }
-        }
+        // Load token directly from account model (stored in local storage)
+        personalAccessToken = account.personalAccessToken
+        // Save original token to allow unchanged token in validation
+        originalToken = account.personalAccessToken
     }
 
     private func save() {

@@ -46,13 +46,12 @@ struct GitAccount: Identifiable, Equatable, Hashable, Sendable {
     }
 }
 
-// MARK: - Codable (PAT excluded for security)
+// MARK: - Codable (PAT included in local storage)
 
 extension GitAccount: Codable {
     enum CodingKeys: String, CodingKey {
-        case id, displayName, githubUsername, gitUserName, gitUserEmail
-        case isActive, createdAt, lastUsedAt
-        // personalAccessToken intentionally excluded - stored in Keychain
+        case id, displayName, githubUsername, personalAccessToken
+        case gitUserName, gitUserEmail, isActive, createdAt, lastUsedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -60,12 +59,12 @@ extension GitAccount: Codable {
         id = try container.decode(UUID.self, forKey: .id)
         displayName = try container.decode(String.self, forKey: .displayName)
         githubUsername = try container.decode(String.self, forKey: .githubUsername)
+        personalAccessToken = try container.decode(String.self, forKey: .personalAccessToken)
         gitUserName = try container.decode(String.self, forKey: .gitUserName)
         gitUserEmail = try container.decode(String.self, forKey: .gitUserEmail)
         isActive = try container.decode(Bool.self, forKey: .isActive)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         lastUsedAt = try container.decodeIfPresent(Date.self, forKey: .lastUsedAt)
-        personalAccessToken = ""  // Never loaded from storage - retrieved from Keychain when needed
     }
 
     func encode(to encoder: Encoder) throws {
@@ -73,12 +72,12 @@ extension GitAccount: Codable {
         try container.encode(id, forKey: .id)
         try container.encode(displayName, forKey: .displayName)
         try container.encode(githubUsername, forKey: .githubUsername)
+        try container.encode(personalAccessToken, forKey: .personalAccessToken)
         try container.encode(gitUserName, forKey: .gitUserName)
         try container.encode(gitUserEmail, forKey: .gitUserEmail)
         try container.encode(isActive, forKey: .isActive)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encodeIfPresent(lastUsedAt, forKey: .lastUsedAt)
-        // personalAccessToken intentionally NOT encoded
     }
 }
 
