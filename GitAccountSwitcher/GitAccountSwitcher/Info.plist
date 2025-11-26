@@ -2,9 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Hide from Dock - Menu bar app only -->
-    <key>LSUIElement</key>
-    <true/>
+    <!-- NOTE: LSUIElement removed - dock visibility controlled programmatically via setActivationPolicy -->
+    <!-- App starts in accessory mode (no dock) and shows dock icon when main window opens -->
 
     <!-- App info -->
     <key>CFBundleName</key>

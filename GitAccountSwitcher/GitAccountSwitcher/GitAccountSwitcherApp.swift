@@ -9,6 +9,7 @@ struct GitAccountSwitcherApp: App {
     @StateObject private var accountStore = AccountStore()
     @State private var showingAddAccount = false
     @State private var dockBadgeCount = 0
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     init() {
         // Request notification permissions with enhanced options for 2025
@@ -21,6 +22,7 @@ struct GitAccountSwitcherApp: App {
 
     var body: some Scene {
         // Main window with enhanced visual effects
+        // NOTE: Dock icon visibility is managed by AppDelegate via window notifications
         Window("Git Account Switcher", id: "main") {
             MainWindowView()
                 .environmentObject(accountStore)
@@ -159,8 +161,10 @@ struct MainWindowView: View {
     @State private var switchError: Error?
     @State private var showingError = false
     @State private var hoveredAccountId: UUID?
+    @State private var showingWelcome = false
     @AppStorage("showNotificationOnSwitch") private var showNotificationOnSwitch = true
     @AppStorage("enableVisualEffects") private var enableVisualEffects = true
+    @AppStorage("hasCompletedWelcome") private var hasCompletedWelcome = false
 
     var body: some View {
         ZStack {
@@ -225,10 +229,20 @@ struct MainWindowView: View {
             AddEditAccountView(mode: .add)
                 .environmentObject(accountStore)
         }
+        .sheet(isPresented: $showingWelcome) {
+            WelcomeView()
+                .environmentObject(accountStore)
+        }
         .alert("Switch Failed", isPresented: $showingError, presenting: switchError) { _ in
             Button("OK", role: .cancel) {}
         } message: { error in
             Text(error.localizedDescription)
+        }
+        .onAppear {
+            // Show welcome screen on first launch
+            if !hasCompletedWelcome {
+                showingWelcome = true
+            }
         }
     }
 
@@ -1293,3 +1307,120 @@ extension Color {
         )
     }
 }
+
+// MARK: - App Delegate for Dock Icon Control
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+
+    private static let mainWindowTitle = "Git Account Switcher"
+
+    /// Controls dock icon visibility dynamically
+    /// - Parameter visible: true to show dock icon, false to hide (menu bar only mode)
+    static func setDockIconVisible(_ visible: Bool) {
+        DispatchQueue.main.async {
+            if visible {
+                NSApp.setActivationPolicy(.regular)
+                NSApp.activate(ignoringOtherApps: true)
+            } else {
+                NSApp.setActivationPolicy(.accessory)
+            }
+        }
+    }
+
+    /// Checks if a window is the main app window (not menu bar extra or system windows)
+    private static func isMainWindow(_ window: NSWindow) -> Bool {
+        // Check by title or window identifier
+        if window.title == mainWindowTitle {
+            return true
+        }
+        if let identifier = window.identifier?.rawValue, identifier.contains("main") {
+            return true
+        }
+        // Also check for standard window level and non-empty title (excludes menu bar extra)
+        // Menu bar extra windows typically have empty titles and special levels
+        return false
+    }
+
+    /// Checks if any main windows are currently visible
+    private static func hasVisibleMainWindows() -> Bool {
+        NSApp.windows.contains { window in
+            window.isVisible && isMainWindow(window)
+        }
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Start as menu bar only (accessory mode)
+        NSApp.setActivationPolicy(.accessory)
+
+        // Observe window visibility changes - use multiple notifications for reliability
+        let windowNotifications: [(Notification.Name, Selector)] = [
+            (NSWindow.didBecomeMainNotification, #selector(windowDidBecomeVisible(_:))),
+            (NSWindow.didBecomeKeyNotification, #selector(windowDidBecomeVisible(_:))),
+            (NSWindow.willCloseNotification, #selector(windowWillClose(_:))),
+            (NSWindow.didMiniaturizeNotification, #selector(windowDidMiniaturize(_:)))
+        ]
+
+        for (name, selector) in windowNotifications {
+            NotificationCenter.default.addObserver(self, selector: selector, name: name, object: nil)
+        }
+    }
+
+    @objc private func windowDidBecomeVisible(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              AppDelegate.isMainWindow(window) else { return }
+
+        AppDelegate.setDockIconVisible(true)
+    }
+
+    @objc private func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              AppDelegate.isMainWindow(window) else { return }
+
+        // Delay to allow window to fully close before checking
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            if !AppDelegate.hasVisibleMainWindows() {
+                AppDelegate.setDockIconVisible(false)
+            }
+        }
+    }
+
+    @objc private func windowDidMiniaturize(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              AppDelegate.isMainWindow(window) else { return }
+
+        // When minimized, check if any other main windows are visible
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            if !AppDelegate.hasVisibleMainWindows() {
+                AppDelegate.setDockIconVisible(false)
+            }
+        }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false // Keep running in menu bar
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        // When dock icon is clicked, show main window
+        AppDelegate.setDockIconVisible(true)
+        if !flag {
+            // Try to find and show the main window
+            if let window = NSApp.windows.first(where: { AppDelegate.isMainWindow($0) }) {
+                window.makeKeyAndOrderFront(nil)
+            }
+        }
+        return true
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        // When app becomes active (e.g., clicked in dock or Cmd+Tab), show dock icon
+        if AppDelegate.hasVisibleMainWindows() {
+            AppDelegate.setDockIconVisible(true)
+        }
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+}
+

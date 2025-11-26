@@ -60,7 +60,19 @@ final class AccountStore: ObservableObject {
     init() {
         loadAccounts()
         Task {
+            // Ensure git is configured to use osxkeychain for credential storage
+            await ensureGitCredentialHelper()
             await refreshCurrentGitConfig()
+        }
+    }
+
+    /// Ensures git credential helper is configured for osxkeychain
+    /// This is required for the app to work - git must read credentials from macOS Keychain
+    private func ensureGitCredentialHelper() async {
+        do {
+            try gitConfigService.ensureOsxKeychainHelper()
+        } catch {
+            print("Warning: Could not configure osxkeychain credential helper: \(error)")
         }
     }
 
@@ -75,17 +87,17 @@ final class AccountStore: ObservableObject {
 
         var newAccount = account
 
-        // Store token in keychain
-        try keychainService.storeAccountToken(for: newAccount.id, token: newAccount.personalAccessToken)
-
-        // Clear token from in-memory object (we'll retrieve from keychain when needed)
-        newAccount.personalAccessToken = ""
-
-        // If this is the first account, make it active
+        // If this is the first account, make it active and update Keychain
         if accounts.isEmpty {
             newAccount.isActive = true
+            // Set as THE github.com credential in Keychain
+            try keychainService.updateGitHubCredential(
+                username: newAccount.githubUsername,
+                token: newAccount.personalAccessToken
+            )
         }
 
+        // PAT is stored in the model itself (UserDefaults)
         accounts.append(newAccount)
         saveAccounts()
     }
@@ -96,24 +108,42 @@ final class AccountStore: ObservableObject {
             return
         }
 
-        var updatedAccount = account
+        // Update account in array (PAT is included in model)
+        accounts[index] = account
 
-        // Update token in keychain if provided
-        if !account.personalAccessToken.isEmpty {
-            try keychainService.storeAccountToken(for: account.id, token: account.personalAccessToken)
-            updatedAccount.personalAccessToken = ""
+        // If this is the active account, update THE github.com Keychain entry
+        if account.isActive {
+            try keychainService.updateGitHubCredential(
+                username: account.githubUsername,
+                token: account.personalAccessToken
+            )
         }
 
-        accounts[index] = updatedAccount
         saveAccounts()
     }
 
     /// Removes an account from the store
     func removeAccount(_ account: GitAccount) throws {
-        // Remove token from keychain
-        try keychainService.deleteAccountToken(for: account.id)
+        // If deleting the active account, clear THE github.com Keychain entry
+        if account.isActive {
+            try? keychainService.deleteGitHubCredential()
 
-        accounts.removeAll { $0.id == account.id }
+            // If there are other accounts, activate the first one
+            accounts.removeAll { $0.id == account.id }
+            if !accounts.isEmpty {
+                accounts[0].isActive = true
+                accounts[0].lastUsedAt = Date()
+                // Update Keychain with new active account
+                try keychainService.updateGitHubCredential(
+                    username: accounts[0].githubUsername,
+                    token: accounts[0].personalAccessToken
+                )
+            }
+        } else {
+            // Just remove non-active account
+            accounts.removeAll { $0.id == account.id }
+        }
+
         saveAccounts()
     }
 
@@ -199,16 +229,22 @@ final class AccountStore: ObservableObject {
             }
 
             do {
-                // SECURITY: Retrieve token from keychain with biometric authentication
-                guard let token = try await keychainService.retrieveAccountTokenWithAuth(for: account.id) else {
+                // Get token directly from account model (stored in local storage)
+                let token = account.personalAccessToken
+                guard !token.isEmpty else {
                     throw AccountStoreError.tokenNotFound
                 }
 
-                // Update GitHub Keychain credential
+                // Update THE SINGLE GitHub Keychain credential entry
+                // This updates both username and password in one operation
                 try keychainService.updateGitHubCredential(
                     username: account.githubUsername,
                     token: token
                 )
+
+                // Clear git credential cache to force fresh credential fetch
+                // This prevents using cached credentials from previous account
+                try? await gitConfigService.clearGitHubCredentialCacheAsync()
 
                 // Update git config
                 try await gitConfigService.setGlobalUserConfigAsync(
@@ -311,23 +347,6 @@ final class AccountStore: ObservableObject {
     }
 }
 
-// MARK: - Token Retrieval for Editing
-
-extension AccountStore {
-
-    /// Retrieves the full account with token for editing
-    /// SECURITY: Requires biometric authentication before exposing token
-    /// - Parameter account: The account to retrieve token for
-    /// - Returns: Account with personalAccessToken populated
-    /// - Throws: KeychainError if token retrieval fails or authentication is denied
-    func getAccountWithToken(_ account: GitAccount) async throws -> GitAccount {
-        var fullAccount = account
-        // SECURITY: Always require biometric authentication for token access
-        // This prevents unauthorized token viewing via the edit account flow
-        fullAccount.personalAccessToken = try await keychainService.retrieveAccountTokenWithAuth(for: account.id) ?? ""
-        return fullAccount
-    }
-}
 
 // MARK: - Sync with System Keychain
 

@@ -47,39 +47,116 @@ final class KeychainService {
 
     // MARK: - Biometric Authentication
 
-    /// Requests biometric authentication before accessing sensitive Keychain items
-    /// SECURITY: Adds an extra layer of protection for token retrieval
-    private func authenticateWithBiometrics(reason: String) async throws {
-        let context = LAContext()
-        var error: NSError?
+    /// Authentication method available on the device
+    enum AuthMethod {
+        case touchID
+        case faceID
+        case opticID
+        case password
+        case none
 
-        // Check if biometric authentication is available
-        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) else {
-            // Fallback to password authentication if biometrics not available
-            guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
-                throw KeychainError.biometricAuthFailed("Authentication not available: \(error?.localizedDescription ?? "unknown error")")
+        var displayName: String {
+            switch self {
+            case .touchID: return "Touch ID"
+            case .faceID: return "Face ID"
+            case .opticID: return "Optic ID"
+            case .password: return "Password"
+            case .none: return "None"
             }
-
-            // Use device password as fallback
-            do {
-                try await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)
-            } catch {
-                throw KeychainError.biometricAuthFailed("Password authentication failed: \(error.localizedDescription)")
-            }
-            return
-        }
-
-        // Evaluate biometric policy
-        do {
-            try await context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason)
-        } catch {
-            throw KeychainError.biometricAuthFailed(error.localizedDescription)
         }
     }
 
-    // MARK: - Read GitHub Credential
+    /// Returns the available authentication method on this device
+    func availableAuthMethod() -> AuthMethod {
+        let context = LAContext()
+        var error: NSError?
 
-    /// Reads the current GitHub credential from Keychain
+        if context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) {
+            switch context.biometryType {
+            case .touchID:
+                return .touchID
+            case .faceID:
+                return .faceID
+            case .opticID:
+                return .opticID
+            case .none:
+                return .password
+            @unknown default:
+                return .password
+            }
+        } else if context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) {
+            return .password
+        }
+
+        return .none
+    }
+
+    /// Requests biometric authentication before accessing sensitive Keychain items
+    /// SECURITY: Adds an extra layer of protection for token retrieval
+    /// - Parameter reason: The reason displayed to the user for authentication
+    /// - Returns: True if authentication succeeded
+    func authenticateWithBiometrics(reason: String) async throws {
+        let context = LAContext()
+        var error: NSError?
+
+        // Configure context for better UX
+        context.localizedCancelTitle = "Cancel"
+        context.localizedFallbackTitle = "Use Password"
+
+        // Check if biometric authentication is available
+        if context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) {
+            // Try biometric authentication first
+            do {
+                try await context.evaluatePolicy(
+                    .deviceOwnerAuthenticationWithBiometrics,
+                    localizedReason: reason
+                )
+                return // Success
+            } catch let authError as LAError {
+                // If user chose fallback or biometrics failed, try password
+                if authError.code == .userFallback || authError.code == .biometryLockout {
+                    try await authenticateWithPassword(context: context, reason: reason)
+                    return
+                }
+                // User cancelled or other error
+                throw KeychainError.biometricAuthFailed(authError.localizedDescription)
+            }
+        }
+
+        // Biometrics not available, try password authentication
+        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
+            throw KeychainError.biometricAuthFailed(
+                "Authentication not available: \(error?.localizedDescription ?? "unknown error")"
+            )
+        }
+
+        try await authenticateWithPassword(context: context, reason: reason)
+    }
+
+    /// Authenticates using device password
+    private func authenticateWithPassword(context: LAContext, reason: String) async throws {
+        do {
+            try await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)
+        } catch {
+            throw KeychainError.biometricAuthFailed("Password authentication failed: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Read GitHub Credential (with Biometric Auth)
+
+    /// Reads the current GitHub credential from Keychain with biometric authentication
+    /// SECURITY: Requires Touch ID, Face ID, or password before returning sensitive token data
+    /// - Parameter reason: The reason displayed to the user for authentication
+    /// - Returns: Tuple of (username, token) if found and authenticated
+    func readGitHubCredentialWithAuth(reason: String = "Access GitHub credentials") async throws -> (username: String, token: String)? {
+        // First authenticate with biometrics/password
+        try await authenticateWithBiometrics(reason: reason)
+
+        // Then read the credential
+        return try readGitHubCredential()
+    }
+
+    /// Reads the current GitHub credential from Keychain (no authentication required)
     /// - Returns: Tuple of (username, token) if found
     func readGitHubCredential() throws -> (username: String, token: String)? {
         let query: [String: Any] = [
@@ -149,60 +226,29 @@ final class KeychainService {
         }
     }
 
-    // MARK: - Update/Add GitHub Credential
+    // MARK: - Update/Add GitHub Credential (Single Entry)
 
-    /// Updates or adds GitHub credential in Keychain
+    /// Updates or adds THE SINGLE GitHub credential in Keychain
+    /// This app maintains only ONE github.com entry that gets updated on account switch
     /// - Parameters:
-    ///   - username: GitHub username
-    ///   - token: Personal Access Token
+    ///   - username: GitHub username for current account
+    ///   - token: Personal Access Token for current account
     func updateGitHubCredential(username: String, token: String) throws {
         guard let tokenData = token.data(using: .utf8) else {
             throw KeychainError.encodingFailed
         }
 
-        // Try to add first (most common case for new installs)
-        let addQuery: [String: Any] = [
-            kSecClass as String: kSecClassInternetPassword,
-            kSecAttrServer as String: githubServer,
-            kSecAttrProtocol as String: kSecAttrProtocolHTTPS,
-            kSecAttrAccount as String: username,
-            kSecValueData as String: tokenData,
-            kSecAttrLabel as String: "github.com (\(username))",
-            kSecAttrComment as String: "GitHub Personal Access Token - Managed by GitAccountSwitcher",
-            // SECURITY: Only accessible when device is unlocked, non-migratable
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-            // SECURITY: Prevent iCloud Keychain sync - tokens stay local
-            kSecAttrSynchronizable as String: false
-        ]
-
-        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-
-        if addStatus == errSecSuccess {
-            return // Successfully added
-        }
-
-        // If duplicate exists, update instead
-        if addStatus == errSecDuplicateItem {
-            try updateExistingGitHubCredential(username: username, tokenData: tokenData)
-            return
-        }
-
-        // Unexpected error
-        throw KeychainError.unexpectedStatus(addStatus)
-    }
-
-    /// Helper to update an existing GitHub credential
-    private func updateExistingGitHubCredential(username: String, tokenData: Data) throws {
-        // Query must include account to update the correct entry
+        // First, try to update existing entry (most common after first setup)
         let updateQuery: [String: Any] = [
             kSecClass as String: kSecClassInternetPassword,
             kSecAttrServer as String: githubServer,
-            kSecAttrProtocol as String: kSecAttrProtocolHTTPS,
-            kSecAttrAccount as String: username
+            kSecAttrProtocol as String: kSecAttrProtocolHTTPS
+            // NOTE: No kSecAttrAccount in query - we update THE entry for github.com
         ]
 
         let updateAttributes: [String: Any] = [
-            kSecValueData as String: tokenData,
+            kSecAttrAccount as String: username,  // Update username
+            kSecValueData as String: tokenData,    // Update password (token)
             kSecAttrLabel as String: "github.com (\(username))",
             kSecAttrComment as String: "GitHub Personal Access Token - Managed by GitAccountSwitcher",
             // SECURITY: Maintain security attributes on update
@@ -212,36 +258,48 @@ final class KeychainService {
 
         let updateStatus = SecItemUpdate(updateQuery as CFDictionary, updateAttributes as CFDictionary)
 
-        guard updateStatus == errSecSuccess else {
-            throw KeychainError.unexpectedStatus(updateStatus)
+        if updateStatus == errSecSuccess {
+            return // Successfully updated
         }
+
+        // If no entry exists, create it (first-time setup)
+        if updateStatus == errSecItemNotFound {
+            let addQuery: [String: Any] = [
+                kSecClass as String: kSecClassInternetPassword,
+                kSecAttrServer as String: githubServer,
+                kSecAttrProtocol as String: kSecAttrProtocolHTTPS,
+                kSecAttrAccount as String: username,
+                kSecValueData as String: tokenData,
+                kSecAttrLabel as String: "github.com (\(username))",
+                kSecAttrComment as String: "GitHub Personal Access Token - Managed by GitAccountSwitcher",
+                // SECURITY: Only accessible when device is unlocked, non-migratable
+                kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+                // SECURITY: Prevent iCloud Keychain sync - tokens stay local
+                kSecAttrSynchronizable as String: false
+            ]
+
+            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+
+            guard addStatus == errSecSuccess else {
+                throw KeychainError.unexpectedStatus(addStatus)
+            }
+            return
+        }
+
+        // Unexpected error
+        throw KeychainError.unexpectedStatus(updateStatus)
     }
 
     // MARK: - Delete GitHub Credential
 
-    /// Deletes a specific GitHub credential from Keychain
-    /// - Parameter username: GitHub username to delete
-    func deleteGitHubCredential(username: String) throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassInternetPassword,
-            kSecAttrServer as String: githubServer,
-            kSecAttrProtocol as String: kSecAttrProtocolHTTPS,
-            kSecAttrAccount as String: username
-        ]
-
-        let status = SecItemDelete(query as CFDictionary)
-
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw KeychainError.unexpectedStatus(status)
-        }
-    }
-
-    /// Deletes all GitHub credentials from Keychain
-    func deleteAllGitHubCredentials() throws {
+    /// Deletes THE SINGLE GitHub credential from Keychain
+    /// Call this when deleting the active account or when app needs to clear credentials
+    func deleteGitHubCredential() throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassInternetPassword,
             kSecAttrServer as String: githubServer,
             kSecAttrProtocol as String: kSecAttrProtocolHTTPS
+            // NOTE: No kSecAttrAccount - we delete THE entry for github.com
         ]
 
         let status = SecItemDelete(query as CFDictionary)
@@ -273,115 +331,8 @@ final class KeychainService {
     }
 }
 
-// MARK: - App-specific Keychain Storage
-
-extension KeychainService {
-
-    private static let appService = "com.gitaccountswitcher.accounts"
-
-    /// Stores account tokens securely in app's own Keychain entries
-    /// These are stored separately from the GitHub Keychain entry
-    func storeAccountToken(for accountId: UUID, token: String) throws {
-        guard let tokenData = token.data(using: .utf8) else {
-            throw KeychainError.encodingFailed
-        }
-
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.appService,
-            kSecAttrAccount as String: accountId.uuidString
-        ]
-
-        // Try to add first with security attributes
-        var addQuery = query
-        addQuery[kSecValueData as String] = tokenData
-        addQuery[kSecAttrLabel as String] = "GitAccountSwitcher (\(accountId.uuidString.prefix(8)))"
-        addQuery[kSecAttrComment as String] = "GitHub Personal Access Token - Managed by GitAccountSwitcher"
-        // SECURITY: Only accessible when device is unlocked, non-migratable
-        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        // SECURITY: Prevent iCloud Keychain sync - tokens stay local
-        addQuery[kSecAttrSynchronizable as String] = false
-
-        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-
-        if addStatus == errSecSuccess {
-            return // Successfully added
-        }
-
-        // If duplicate, try to update instead
-        if addStatus == errSecDuplicateItem {
-            let updateAttributes: [String: Any] = [
-                kSecValueData as String: tokenData,
-                kSecAttrLabel as String: "GitAccountSwitcher (\(accountId.uuidString.prefix(8)))",
-                kSecAttrComment as String: "GitHub Personal Access Token - Managed by GitAccountSwitcher",
-                // SECURITY: Maintain security attributes on update
-                kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-                kSecAttrSynchronizable as String: false
-            ]
-
-            let updateStatus = SecItemUpdate(query as CFDictionary, updateAttributes as CFDictionary)
-
-            guard updateStatus == errSecSuccess else {
-                throw KeychainError.unexpectedStatus(updateStatus)
-            }
-            return
-        }
-
-        // Unexpected error
-        throw KeychainError.unexpectedStatus(addStatus)
-    }
-
-    /// Retrieves account token from app's Keychain storage
-    func retrieveAccountToken(for accountId: UUID) throws -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.appService,
-            kSecAttrAccount as String: accountId.uuidString,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-        if status == errSecItemNotFound {
-            return nil
-        }
-
-        guard status == errSecSuccess else {
-            throw KeychainError.unexpectedStatus(status)
-        }
-
-        guard let data = result as? Data,
-              let token = String(data: data, encoding: .utf8) else {
-            throw KeychainError.invalidData
-        }
-
-        return token
-    }
-
-    /// Retrieves account token with biometric authentication (async version)
-    /// SECURITY: Requires biometric or device password authentication before token retrieval
-    func retrieveAccountTokenWithAuth(for accountId: UUID) async throws -> String? {
-        // SECURITY: Request biometric authentication before accessing token
-        try await authenticateWithBiometrics(reason: "Authenticate to access GitHub account token")
-
-        // After successful authentication, retrieve token
-        return try retrieveAccountToken(for: accountId)
-    }
-
-    /// Deletes account token from app's Keychain storage
-    func deleteAccountToken(for accountId: UUID) throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.appService,
-            kSecAttrAccount as String: accountId.uuidString
-        ]
-
-        let status = SecItemDelete(query as CFDictionary)
-
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw KeychainError.unexpectedStatus(status)
-        }
-    }
-}
+// MARK: - App-specific Keychain Storage (DEPRECATED - PATs now stored in UserDefaults)
+//
+// This code is kept for reference but is NO LONGER USED.
+// PATs are now stored directly in the GitAccount model (saved to UserDefaults).
+// Only ONE github.com Keychain entry is maintained and updated on account switch.
