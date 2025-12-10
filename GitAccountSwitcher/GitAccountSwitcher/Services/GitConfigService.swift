@@ -461,6 +461,14 @@ extension GitConfigService {
         }
     }
 
+    /// Returns the validated git executable path
+    /// SECURITY: Path is validated for code signature before being returned
+    /// - Returns: Path to the git executable
+    /// - Throws: GitConfigError.gitNotFound if no valid git binary is available
+    func getValidatedGitPath() throws -> String {
+        try gitPath
+    }
+
     /// Gets the git version
     func getGitVersion() -> String? {
         try? runGitCommand(["--version"])

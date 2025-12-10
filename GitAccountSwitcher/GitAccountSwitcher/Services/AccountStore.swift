@@ -21,6 +21,7 @@ final class AccountStore: ObservableObject {
 
     private let keychainService = KeychainService.shared
     private let gitConfigService = GitConfigService.shared
+    private let gitHubCLIService = GitHubCLIService.shared
 
     // MARK: - Concurrency Control
 
@@ -62,6 +63,8 @@ final class AccountStore: ObservableObject {
         Task {
             // Ensure git is configured to use osxkeychain for credential storage
             await ensureGitCredentialHelper()
+            // Restore active account credential to keychain on app startup
+            await restoreActiveAccountCredential()
             await refreshCurrentGitConfig()
         }
     }
@@ -73,6 +76,30 @@ final class AccountStore: ObservableObject {
             try gitConfigService.ensureOsxKeychainHelper()
         } catch {
             print("Warning: Could not configure osxkeychain credential helper: \(error)")
+        }
+    }
+
+    /// Restores the active account's credential to keychain on app startup
+    /// This ensures git can authenticate even after keychain is cleared or app reinstall
+    private func restoreActiveAccountCredential() async {
+        guard let active = activeAccount else { return }
+
+        // Check if credential already exists in keychain
+        if keychainService.hasGitHubCredential(for: active.githubUsername) {
+            return
+        }
+
+        // Restore credential from stored token
+        guard !active.personalAccessToken.isEmpty else { return }
+
+        do {
+            try keychainService.updateGitHubCredential(
+                username: active.githubUsername,
+                token: active.personalAccessToken
+            )
+        } catch {
+            // Log error but don't fail - credential will be restored on next switch
+            lastError = error
         }
     }
 
@@ -265,6 +292,10 @@ final class AccountStore: ObservableObject {
                 // Refresh current config
                 await refreshCurrentGitConfig()
 
+                // Switch GitHub CLI account in background (non-blocking)
+                // This is best-effort and won't fail the switch if CLI is not set up
+                await switchGitHubCLIAccount(to: account.githubUsername)
+
             } catch {
                 // RELIABILITY: Rollback to previous state on any failure
                 await rollbackToState(snapshot)
@@ -286,6 +317,30 @@ final class AccountStore: ObservableObject {
             currentGitConfig = try await gitConfigService.getCurrentConfigAsync()
         } catch {
             currentGitConfig = (nil, nil)
+        }
+    }
+
+    /// Switches the GitHub CLI account (best-effort, non-blocking)
+    /// This runs `gh auth switch --user <username>` to sync CLI authentication
+    private func switchGitHubCLIAccount(to username: String) async {
+        // Skip if CLI is not installed
+        guard gitHubCLIService.isInstalled else {
+            print("Note: GitHub CLI not installed, skipping gh auth switch")
+            return
+        }
+
+        do {
+            try await gitHubCLIService.switchAccount(to: username)
+            print("Successfully switched GitHub CLI to account: \(username)")
+        } catch GitHubCLIService.GitHubCLIError.accountNotFound {
+            // Account not in CLI - this is expected if user hasn't logged in with gh
+            print("Note: Account '\(username)' not found in GitHub CLI (run 'gh auth login' to add it)")
+        } catch GitHubCLIService.GitHubCLIError.notLoggedIn {
+            // Not logged in to CLI - expected for new users
+            print("Note: Not logged in to GitHub CLI (run 'gh auth login' to enable CLI switching)")
+        } catch {
+            // Log but don't fail - CLI switching is optional
+            print("Warning: GitHub CLI switch failed: \(error.localizedDescription)")
         }
     }
 

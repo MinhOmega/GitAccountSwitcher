@@ -162,9 +162,12 @@ struct MainWindowView: View {
     @State private var showingError = false
     @State private var hoveredAccountId: UUID?
     @State private var showingWelcome = false
+    @State private var showingCLISetup = false
     @AppStorage("showNotificationOnSwitch") private var showNotificationOnSwitch = true
     @AppStorage("enableVisualEffects") private var enableVisualEffects = true
     @AppStorage("hasCompletedWelcome") private var hasCompletedWelcome = false
+    @AppStorage("hasCompletedCLISetup") private var hasCompletedCLISetup = false
+    @AppStorage("skipCLISetup") private var skipCLISetup = false
 
     var body: some View {
         ZStack {
@@ -233,6 +236,9 @@ struct MainWindowView: View {
             WelcomeView()
                 .environmentObject(accountStore)
         }
+        .sheet(isPresented: $showingCLISetup) {
+            GitHubCLISetupView()
+        }
         .alert("Switch Failed", isPresented: $showingError, presenting: switchError) { _ in
             Button("OK", role: .cancel) {}
         } message: { error in
@@ -242,6 +248,15 @@ struct MainWindowView: View {
             // Show welcome screen on first launch
             if !hasCompletedWelcome {
                 showingWelcome = true
+            }
+        }
+        .onChange(of: showingWelcome) { newValue in
+            // Show CLI setup after welcome is completed
+            if !newValue && hasCompletedWelcome && !hasCompletedCLISetup && !skipCLISetup {
+                // Small delay to avoid sheet presentation conflict
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    showingCLISetup = true
+                }
             }
         }
     }
@@ -935,11 +950,16 @@ struct SettingsView: View {
 struct GeneralSettingsView: View {
     @AppStorage("showNotificationOnSwitch") private var showNotificationOnSwitch = true
     @AppStorage("enableVisualEffects") private var enableVisualEffects = true
+    @AppStorage("hasCompletedCLISetup") private var hasCompletedCLISetup = false
+    @AppStorage("skipCLISetup") private var skipCLISetup = false
     @State private var launchAtLogin = false
     @State private var launchAtLoginError: String?
     @State private var isHoveringNotification = false
     @State private var isHoveringVisualEffects = false
     @State private var isHoveringLaunch = false
+    @State private var showingCLISetup = false
+    @State private var isCLIInstalled = false
+    @State private var isCLILoggedIn = false
 
     var body: some View {
         Form {
@@ -975,11 +995,63 @@ struct GeneralSettingsView: View {
                         .foregroundColor(.red)
                 }
             }
+
+            Section("GitHub CLI") {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 8) {
+                            Image(systemName: isCLIInstalled ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                .foregroundStyle(isCLIInstalled ? .green : .red)
+                            Text("GitHub CLI (gh)")
+                                .font(.body)
+                        }
+
+                        if isCLIInstalled {
+                            HStack(spacing: 8) {
+                                Image(systemName: isCLILoggedIn ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                                    .foregroundStyle(isCLILoggedIn ? .green : .orange)
+                                    .font(.caption)
+                                Text(isCLILoggedIn ? "Logged in" : "Not logged in")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else {
+                            Text("Not installed")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Spacer()
+
+                    Button("Setup") {
+                        // Reset the setup flags to allow re-running
+                        hasCompletedCLISetup = false
+                        skipCLISetup = false
+                        showingCLISetup = true
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
         }
         .formStyle(.grouped)
         .padding()
         .onAppear {
             launchAtLogin = SMAppService.mainApp.status == .enabled
+            checkCLIStatus()
+        }
+        .sheet(isPresented: $showingCLISetup) {
+            GitHubCLISetupView()
+        }
+    }
+
+    private func checkCLIStatus() {
+        Task {
+            let status = await GitHubCLIService.shared.checkFullStatus()
+            await MainActor.run {
+                isCLIInstalled = status.isInstalled
+                isCLILoggedIn = status.isLoggedIn
+            }
         }
     }
 

@@ -85,6 +85,8 @@ struct AddEditAccountView: View {
     @State private var showingError = false
     @State private var showingTokenHelp = false
     @State private var originalToken = "" // Track original token for edit mode
+    @State private var showingCLIReminder = false
+    @State private var savedAccountName = ""
 
     // MARK: - Token Validation Helper
 
@@ -165,6 +167,13 @@ struct AddEditAccountView: View {
         }
         .sheet(isPresented: $showingTokenHelp) {
             TokenHelpView()
+        }
+        .cliLoginReminder(isPresented: $showingCLIReminder, accountName: savedAccountName)
+        .onChange(of: showingCLIReminder) { newValue in
+            // Dismiss the view after CLI reminder alert is closed
+            if !newValue && !savedAccountName.isEmpty {
+                dismiss()
+            }
         }
     }
 
@@ -411,6 +420,16 @@ struct AddEditAccountView: View {
                 switch mode {
                 case .add:
                     try accountStore.addAccount(account)
+                    // Show CLI login reminder for new accounts if CLI is installed
+                    await MainActor.run {
+                        if GitHubCLIService.shared.isInstalled {
+                            savedAccountName = account.displayName
+                            showingCLIReminder = true
+                        } else {
+                            dismiss()
+                        }
+                    }
+                    return // Don't dismiss yet if showing reminder
                 case .edit:
                     try accountStore.updateAccount(account)
                 }

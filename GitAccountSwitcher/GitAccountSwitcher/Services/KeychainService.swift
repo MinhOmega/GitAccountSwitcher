@@ -230,64 +230,80 @@ final class KeychainService {
 
     /// Updates or adds THE SINGLE GitHub credential in Keychain
     /// This app maintains only ONE github.com entry that gets updated on account switch
+    /// Uses the exact format that git credential-osxkeychain expects
     /// - Parameters:
     ///   - username: GitHub username for current account
     ///   - token: Personal Access Token for current account
     func updateGitHubCredential(username: String, token: String) throws {
-        guard let tokenData = token.data(using: .utf8) else {
-            throw KeychainError.encodingFailed
+        // First, delete any existing github.com credential to ensure clean state
+        // This is the most reliable approach as git credential-osxkeychain
+        // expects a specific format that may conflict with Security framework defaults
+        try? deleteGitHubCredential()
+
+        // Use git credential-osxkeychain store to add the credential
+        // This ensures the format is exactly what git expects
+        try storeCredentialUsingGit(username: username, token: token)
+    }
+
+    /// Stores credential using git credential-osxkeychain for perfect compatibility
+    private func storeCredentialUsingGit(username: String, token: String) throws {
+        try runGitCredentialCommand(
+            action: "store",
+            input: """
+            protocol=https
+            host=github.com
+            username=\(username)
+            password=\(token)
+
+            """
+        )
+    }
+
+    /// Runs a git credential-osxkeychain command with the given action and input
+    private func runGitCredentialCommand(action: String, input: String) throws {
+        let process = Process()
+        let inputPipe = Pipe()
+
+        // Use GitConfigService's validated git path (includes code signature verification)
+        let gitPath: String
+        do {
+            gitPath = try GitConfigService.shared.getValidatedGitPath()
+        } catch {
+            // Fallback to standard path if GitConfigService fails
+            gitPath = "/usr/bin/git"
         }
 
-        // First, try to update existing entry (most common after first setup)
-        let updateQuery: [String: Any] = [
-            kSecClass as String: kSecClassInternetPassword,
-            kSecAttrServer as String: githubServer,
-            kSecAttrProtocol as String: kSecAttrProtocolHTTPS
-            // NOTE: No kSecAttrAccount in query - we update THE entry for github.com
+        process.executableURL = URL(fileURLWithPath: gitPath)
+        process.arguments = ["credential-osxkeychain", action]
+        process.standardInput = inputPipe
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+
+        // Sanitize environment (matches GitConfigService pattern)
+        process.environment = [
+            "HOME": FileManager.default.homeDirectoryForCurrentUser.path,
+            "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+            "LANG": "en_US.UTF-8"
         ]
 
-        let updateAttributes: [String: Any] = [
-            kSecAttrAccount as String: username,  // Update username
-            kSecValueData as String: tokenData,    // Update password (token)
-            kSecAttrLabel as String: "github.com (\(username))",
-            kSecAttrComment as String: "GitHub Personal Access Token - Managed by GitAccountSwitcher",
-            // SECURITY: Maintain security attributes on update
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-            kSecAttrSynchronizable as String: false
-        ]
+        do {
+            try process.run()
 
-        let updateStatus = SecItemUpdate(updateQuery as CFDictionary, updateAttributes as CFDictionary)
-
-        if updateStatus == errSecSuccess {
-            return // Successfully updated
-        }
-
-        // If no entry exists, create it (first-time setup)
-        if updateStatus == errSecItemNotFound {
-            let addQuery: [String: Any] = [
-                kSecClass as String: kSecClassInternetPassword,
-                kSecAttrServer as String: githubServer,
-                kSecAttrProtocol as String: kSecAttrProtocolHTTPS,
-                kSecAttrAccount as String: username,
-                kSecValueData as String: tokenData,
-                kSecAttrLabel as String: "github.com (\(username))",
-                kSecAttrComment as String: "GitHub Personal Access Token - Managed by GitAccountSwitcher",
-                // SECURITY: Only accessible when device is unlocked, non-migratable
-                kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-                // SECURITY: Prevent iCloud Keychain sync - tokens stay local
-                kSecAttrSynchronizable as String: false
-            ]
-
-            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-
-            guard addStatus == errSecSuccess else {
-                throw KeychainError.unexpectedStatus(addStatus)
+            if let data = input.data(using: .utf8) {
+                inputPipe.fileHandleForWriting.write(data)
+                try? inputPipe.fileHandleForWriting.close()
             }
-            return
-        }
 
-        // Unexpected error
-        throw KeychainError.unexpectedStatus(updateStatus)
+            process.waitUntilExit()
+
+            guard process.terminationStatus == 0 else {
+                throw KeychainError.unexpectedStatus(OSStatus(process.terminationStatus))
+            }
+        } catch let error as KeychainError {
+            throw error
+        } catch {
+            throw KeychainError.unexpectedStatus(-1)
+        }
     }
 
     // MARK: - Delete GitHub Credential
@@ -295,18 +311,30 @@ final class KeychainService {
     /// Deletes THE SINGLE GitHub credential from Keychain
     /// Call this when deleting the active account or when app needs to clear credentials
     func deleteGitHubCredential() throws {
+        // Use git credential-osxkeychain erase for proper cleanup
+        eraseCredentialUsingGit()
+
+        // Also try Security framework delete as backup
         let query: [String: Any] = [
             kSecClass as String: kSecClassInternetPassword,
             kSecAttrServer as String: githubServer,
             kSecAttrProtocol as String: kSecAttrProtocolHTTPS
-            // NOTE: No kSecAttrAccount - we delete THE entry for github.com
         ]
+        _ = SecItemDelete(query as CFDictionary)
+    }
 
-        let status = SecItemDelete(query as CFDictionary)
+    /// Erases credential using git credential-osxkeychain for proper cleanup
+    private func eraseCredentialUsingGit() {
+        // Use the same helper as storeCredentialUsingGit for consistency
+        // Ignore errors since credential might not exist
+        try? runGitCredentialCommand(
+            action: "erase",
+            input: """
+            protocol=https
+            host=github.com
 
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw KeychainError.unexpectedStatus(status)
-        }
+            """
+        )
     }
 
     // MARK: - Verify Credential
