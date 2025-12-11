@@ -1401,39 +1401,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Checks if a window is the main app window (not menu bar extra, sheets, or system windows)
     private static func isMainWindow(_ window: NSWindow) -> Bool {
-        // Exclude sheets and modal windows
-        guard window.sheetParent == nil else { return false }
+        // Debug logging
+        let windowInfo = "title='\(window.title)', id=\(window.identifier?.rawValue ?? "nil"), level=\(window.level.rawValue), isSheet=\(window.sheetParent != nil), isVisible=\(window.isVisible), styleMask=\(window.styleMask.rawValue)"
 
-        // Exclude menu bar extra windows (they have special levels or empty titles)
-        guard window.level == .normal else { return false }
+        // Exclude sheets and modal windows
+        guard window.sheetParent == nil else {
+            print("[DockIcon] Excluded (sheet): \(windowInfo)")
+            return false
+        }
+
+        // Exclude non-normal level windows (menu bar extras, panels, etc.)
+        guard window.level == .normal else {
+            print("[DockIcon] Excluded (level): \(windowInfo)")
+            return false
+        }
+
+        // Exclude windows without standard chrome (likely system or utility windows)
+        // Main windows typically have titled style
+        guard window.styleMask.contains(.titled) else {
+            print("[DockIcon] Excluded (no title bar): \(windowInfo)")
+            return false
+        }
 
         // Check by exact title match
         if window.title == mainWindowTitle {
+            print("[DockIcon] Matched (title): \(windowInfo)")
             return true
         }
 
-        // Check by exact window identifier (SwiftUI Window id)
-        // SwiftUI sets identifier like "AppName-Window-main" or similar patterns
+        // Check by window identifier patterns
         if let identifier = window.identifier?.rawValue {
-            // Match exact "main" ID or SwiftUI's pattern with "-main" suffix
-            if identifier == "main" || identifier.hasSuffix("-main") {
+            // SwiftUI Window scenes use patterns like "AppName-AppWindow-main" or just contain "main"
+            if identifier == "main" ||
+               identifier.hasSuffix("-main") ||
+               identifier.contains("-main-") ||
+               identifier.contains("AppWindow") {
+                print("[DockIcon] Matched (identifier): \(windowInfo)")
                 return true
             }
         }
 
-        // Also consider Settings window as a dock-worthy window
+        // Settings window
         if window.title == "Settings" || window.title.contains("Preferences") {
+            print("[DockIcon] Matched (settings): \(windowInfo)")
             return true
         }
 
+        // If window has our app's bundle identifier prefix, it's likely ours
+        if let identifier = window.identifier?.rawValue,
+           let bundleId = Bundle.main.bundleIdentifier,
+           identifier.hasPrefix(bundleId) {
+            print("[DockIcon] Matched (bundle prefix): \(windowInfo)")
+            return true
+        }
+
+        print("[DockIcon] Not matched: \(windowInfo)")
         return false
     }
 
     /// Checks if any main windows are currently visible
     private static func hasVisibleMainWindows() -> Bool {
-        NSApp.windows.contains { window in
-            window.isVisible && isMainWindow(window)
-        }
+        print("[DockIcon] Checking for visible main windows...")
+        let visibleWindows = NSApp.windows.filter { $0.isVisible }
+        print("[DockIcon] Total visible windows: \(visibleWindows.count)")
+
+        let mainWindows = visibleWindows.filter { isMainWindow($0) }
+        print("[DockIcon] Visible main windows: \(mainWindows.count)")
+
+        return !mainWindows.isEmpty
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

@@ -1,9 +1,14 @@
 import Foundation
 import SwiftUI
+import os.log
 
 /// Observable store for managing GitHub accounts
 @MainActor @preconcurrency
 final class AccountStore: ObservableObject {
+
+    // MARK: - Logging
+
+    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "GitAccountSwitcher", category: "AccountStore")
 
     // MARK: - Published Properties
 
@@ -75,7 +80,7 @@ final class AccountStore: ObservableObject {
         do {
             try gitConfigService.ensureOsxKeychainHelper()
         } catch {
-            print("Warning: Could not configure osxkeychain credential helper: \(error)")
+            Self.logger.warning("Could not configure osxkeychain credential helper: \(error)")
         }
     }
 
@@ -224,11 +229,11 @@ final class AccountStore: ObservableObject {
                 saveAccounts()
             }
 
-            print("Successfully rolled back account switch to previous state")
+            Self.logger.info("Successfully rolled back account switch to previous state")
         } catch {
             // ERROR HANDLING: Rollback failed - log error but don't throw
             // System is now in inconsistent state and may require manual intervention
-            print("CRITICAL: Failed to rollback account switch: \(error.localizedDescription)")
+            Self.logger.critical("Failed to rollback account switch: \(error.localizedDescription)")
             lastError = AccountStoreError.persistenceError("Failed to rollback account switch: \(error.localizedDescription)")
         }
     }
@@ -237,6 +242,7 @@ final class AccountStore: ObservableObject {
     /// Uses task-based serialization to ensure only one switch operation runs at a time
     /// RELIABILITY: Implements transaction pattern with automatic rollback on failure
     func switchToAccount(_ account: GitAccount) async throws {
+
         // Wait for any in-flight switch operation to complete
         // This provides proper serialization following Apple's concurrency best practices
         _ = try? await currentSwitchTask?.value
@@ -323,24 +329,28 @@ final class AccountStore: ObservableObject {
     /// Switches the GitHub CLI account (best-effort, non-blocking)
     /// This runs `gh auth switch --user <username>` to sync CLI authentication
     private func switchGitHubCLIAccount(to username: String) async {
+        Self.logger.info("switchGitHubCLIAccount called for: \(username)")
+
         // Skip if CLI is not installed
         guard gitHubCLIService.isInstalled else {
-            print("Note: GitHub CLI not installed, skipping gh auth switch")
+            Self.logger.info("GitHub CLI not installed, skipping gh auth switch")
             return
         }
 
+        Self.logger.info("GitHub CLI is installed, proceeding with switch...")
+
         do {
-            try await gitHubCLIService.switchAccount(to: username)
-            print("Successfully switched GitHub CLI to account: \(username)")
+            _ = try await gitHubCLIService.switchAccount(to: username)
+            Self.logger.info("Successfully switched GitHub CLI to account: \(username)")
         } catch GitHubCLIService.GitHubCLIError.accountNotFound {
             // Account not in CLI - this is expected if user hasn't logged in with gh
-            print("Note: Account '\(username)' not found in GitHub CLI (run 'gh auth login' to add it)")
+            Self.logger.notice("Account '\(username)' not found in GitHub CLI (run 'gh auth login' to add it)")
         } catch GitHubCLIService.GitHubCLIError.notLoggedIn {
             // Not logged in to CLI - expected for new users
-            print("Note: Not logged in to GitHub CLI (run 'gh auth login' to enable CLI switching)")
+            Self.logger.notice("Not logged in to GitHub CLI (run 'gh auth login' to enable CLI switching)")
         } catch {
             // Log but don't fail - CLI switching is optional
-            print("Warning: GitHub CLI switch failed: \(error.localizedDescription)")
+            Self.logger.error("GitHub CLI switch failed: \(error.localizedDescription)")
         }
     }
 
@@ -356,7 +366,7 @@ final class AccountStore: ObservableObject {
         } catch {
             // ERROR HANDLING: Log encoding failure and set lastError for UI feedback
             lastError = AccountStoreError.persistenceError("Failed to save accounts: \(error.localizedDescription)")
-            print("ERROR: Failed to encode accounts for persistence: \(error)")
+            Self.logger.error("Failed to encode accounts for persistence: \(error)")
         }
     }
 
@@ -374,7 +384,7 @@ final class AccountStore: ObservableObject {
         } catch {
             // ERROR HANDLING: Log decoding failure but don't crash - start with empty state
             lastError = AccountStoreError.persistenceError("Failed to load accounts: \(error.localizedDescription)")
-            print("ERROR: Failed to decode saved accounts: \(error)")
+            Self.logger.error("Failed to decode saved accounts: \(error)")
             accounts = []
         }
     }

@@ -1,8 +1,13 @@
 import Foundation
 import Security
+import os.log
 
 /// Service for managing GitHub CLI (gh) operations
 final class GitHubCLIService {
+
+    // MARK: - Logging
+
+    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "GitAccountSwitcher", category: "GitHubCLI")
 
     // MARK: - Errors
 
@@ -78,29 +83,55 @@ final class GitHubCLIService {
         return nil
     }
 
-    /// Validates gh binary code signature and integrity
+    /// Validates gh binary exists and is executable
+    /// Note: Homebrew binaries are typically not code-signed, so we trust known paths
     private func isValidGhBinary(at path: String) -> Bool {
         let fileManager = FileManager.default
+
+        // Check file exists and is executable
         guard fileManager.fileExists(atPath: path),
               fileManager.isExecutableFile(atPath: path) else {
+            Self.logger.warning("Binary not found or not executable: \(path)")
             return false
         }
 
-        // SECURITY: Use URL(fileURLWithPath:) to prevent URL injection
-        let url = URL(fileURLWithPath: path)
+        // Trust binaries from known Homebrew/system locations
+        // Homebrew binaries are typically not code-signed
+        let trustedPaths = [
+            "/opt/homebrew/bin/gh",   // Homebrew Apple Silicon
+            "/usr/local/bin/gh",      // Homebrew Intel
+            "/usr/bin/gh"             // System location
+        ]
 
-        var staticCode: SecStaticCode?
-        var status = SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode)
-
-        guard status == errSecSuccess, let code = staticCode else {
-            // Allow unsigned binaries from trusted locations (Homebrew)
-            // Homebrew binaries may not be code-signed
-            let trustedPaths = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh"]
-            return trustedPaths.contains(path)
+        if trustedPaths.contains(path) {
+            Self.logger.info("Found trusted gh binary at: \(path)")
+            return true
         }
 
-        status = SecStaticCodeCheckValidity(code, [], nil)
-        return status == errSecSuccess
+        // For other paths, verify it's actually gh by checking version
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = ["--version"]
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            if process.terminationStatus == 0 {
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8) ?? ""
+                if output.contains("gh version") {
+                    Self.logger.info("Validated gh binary at: \(path)")
+                    return true
+                }
+            }
+        } catch {
+            Self.logger.error("Failed to validate binary at \(path): \(error)")
+        }
+
+        return false
     }
 
     private func findGhUsingWhich() -> String? {
@@ -200,45 +231,50 @@ final class GitHubCLIService {
 
         return try await Task.detached(priority: .userInitiated) {
             let output = try self.runGhCommand(path: path, arguments: ["auth", "status"])
-
-            // Parse output to find usernames
-            // Format: "Logged in to github.com account username (keyring)"
-            var accounts: [String] = []
-            for line in output.components(separatedBy: .newlines) {
-                if line.contains("Logged in to") && line.contains("account") {
-                    // Extract username from line
-                    let components = line.components(separatedBy: " ")
-                    if let accountIndex = components.firstIndex(of: "account"),
-                       accountIndex + 1 < components.count {
-                        let username = components[accountIndex + 1].trimmingCharacters(in: .punctuationCharacters)
-                        accounts.append(username)
-                    }
-                }
-            }
-
-            return accounts
+            return self.parseAuthStatusUsernames(from: output)
         }.value
     }
 
     /// Switches to the specified GitHub account using gh auth switch
     /// - Parameter username: The GitHub username to switch to
-    func switchAccount(to username: String) async throws {
+    /// - Returns: The output message from gh auth switch
+    @discardableResult
+    func switchAccount(to username: String) async throws -> String {
         guard let path = ghPath else {
+            Self.logger.error("gh CLI not found")
             throw GitHubCLIError.cliNotInstalled
         }
 
-        try await Task.detached(priority: .userInitiated) {
-            // First check if user is logged in
-            let isLoggedIn = try? self.runGhCommand(path: path, arguments: ["auth", "status"])
-            guard isLoggedIn != nil else {
+        Self.logger.info("Attempting to switch to account: \(username)")
+        Self.logger.debug("Using gh path: \(path)")
+
+        return try await Task.detached(priority: .userInitiated) {
+            // First check if user is logged in and get available accounts
+            let authStatus: String
+            do {
+                authStatus = try self.runGhCommand(path: path, arguments: ["auth", "status"])
+                Self.logger.debug("Auth status retrieved successfully")
+            } catch {
+                Self.logger.error("Error checking auth status: \(error)")
                 throw GitHubCLIError.notLoggedIn
             }
 
-            // Run gh auth switch --user <username>
+            // Find the correct-cased username using case-insensitive matching
+            guard let actualUsername = self.findCorrectCaseUsername(username, in: authStatus) else {
+                Self.logger.warning("Account '\(username)' not found in authenticated accounts")
+                Self.logger.debug("Auth status output: \(authStatus)")
+                throw GitHubCLIError.accountNotFound(username)
+            }
+
+            Self.logger.info("Found correct-case username: '\(actualUsername)' for '\(username)'")
+
+            // Run gh auth switch --user <actualUsername> with correct case
             do {
-                _ = try self.runGhCommand(path: path, arguments: ["auth", "switch", "--user", username])
+                let output = try self.runGhCommand(path: path, arguments: ["auth", "switch", "--user", actualUsername])
+                Self.logger.info("Switch successful for \(username): \(output)")
+                return output
             } catch GitHubCLIError.commandFailed(let message) {
-                // Check if the error is because account not found
+                Self.logger.error("Switch failed: \(message)")
                 if message.contains("not found") || message.contains("no accounts") {
                     throw GitHubCLIError.accountNotFound(username)
                 }
@@ -278,6 +314,35 @@ final class GitHubCLIService {
     }
 
     // MARK: - Private Helpers
+
+    /// Parses gh auth status output to extract authenticated usernames
+    /// - Parameter output: The output from `gh auth status`
+    /// - Returns: Array of usernames with their original casing preserved
+    private func parseAuthStatusUsernames(from output: String) -> [String] {
+        // Format: "✓ Logged in to github.com account MinhOmega (keyring)"
+        var usernames: [String] = []
+        for line in output.components(separatedBy: .newlines) {
+            if line.contains("Logged in to") && line.contains("account") {
+                let components = line.components(separatedBy: " ")
+                if let accountIndex = components.firstIndex(of: "account"),
+                   accountIndex + 1 < components.count {
+                    let username = components[accountIndex + 1].trimmingCharacters(in: .punctuationCharacters)
+                    usernames.append(username)
+                }
+            }
+        }
+        return usernames
+    }
+
+    /// Finds a username in auth status output using case-insensitive matching
+    /// - Parameters:
+    ///   - username: The username to find (any casing)
+    ///   - output: The output from `gh auth status`
+    /// - Returns: The correctly-cased username if found, nil otherwise
+    private func findCorrectCaseUsername(_ username: String, in output: String) -> String? {
+        let lowercaseTarget = username.lowercased()
+        return parseAuthStatusUsernames(from: output).first { $0.lowercased() == lowercaseTarget }
+    }
 
     @discardableResult
     private func runGhCommand(path: String, arguments: [String]) throws -> String {
