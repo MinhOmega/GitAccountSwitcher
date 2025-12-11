@@ -1399,17 +1399,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Checks if a window is the main app window (not menu bar extra or system windows)
+    /// Checks if a window is the main app window (not menu bar extra, sheets, or system windows)
     private static func isMainWindow(_ window: NSWindow) -> Bool {
-        // Check by title or window identifier
+        // Exclude sheets and modal windows
+        guard window.sheetParent == nil else { return false }
+
+        // Exclude menu bar extra windows (they have special levels or empty titles)
+        guard window.level == .normal else { return false }
+
+        // Check by exact title match
         if window.title == mainWindowTitle {
             return true
         }
-        if let identifier = window.identifier?.rawValue, identifier.contains("main") {
+
+        // Check by exact window identifier (SwiftUI Window id)
+        // SwiftUI sets identifier like "AppName-Window-main" or similar patterns
+        if let identifier = window.identifier?.rawValue {
+            // Match exact "main" ID or SwiftUI's pattern with "-main" suffix
+            if identifier == "main" || identifier.hasSuffix("-main") {
+                return true
+            }
+        }
+
+        // Also consider Settings window as a dock-worthy window
+        if window.title == "Settings" || window.title.contains("Preferences") {
             return true
         }
-        // Also check for standard window level and non-empty title (excludes menu bar extra)
-        // Menu bar extra windows typically have empty titles and special levels
+
         return false
     }
 
